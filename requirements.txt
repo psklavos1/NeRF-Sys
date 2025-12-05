@@ -1,0 +1,15 @@
+numpy
+pyyaml
+scikit-image
+scikit-learn
+trimesh
+pyglet<2
+torch
+torch 
+torchvision 
+torchaudio
+pytorchvideo
+opencv-python
+lpips
+pytorch-msssim
+tensorboard
