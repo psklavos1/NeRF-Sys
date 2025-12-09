@@ -1,6 +1,5 @@
 import os, sys, torch, argparse
 
-
 # -------------------------
 # parser builder
 # -------------------------
@@ -50,7 +49,6 @@ def build_parser():
     parser.add_argument("--support_rays", type=int, default=4000)
     parser.add_argument("--query_rays", type=int, default=2000)
     parser.add_argument("--cell_dim", type=int, default=5)
-    
 
     # --- dataloader
     parser.add_argument("--batch_size", type=int, default=3)
@@ -163,6 +161,7 @@ def build_parser():
         choices=["spiral_in", "turntable", "east_west", "north_south", "full_coverage"],
     )
     # --- extras
+    parser.add_argument("--configPath", type=str, default=None)
     parser.add_argument("--num_workers", type=int, default=None)
 
     parser.add_argument("--log_date", action="store_true")
@@ -240,7 +239,7 @@ def parse_args():
 
     # 2) load external config (e.g. JSON) if provided
     #    priority: parser defaults < checkpoint/.P < external config < explicit CLI
-    config_path = getattr(args, "config", None)
+    config_path = getattr(args, "configPath", None)
     if config_path is not None:
         import json
         with open(config_path, "r") as f:
@@ -254,5 +253,9 @@ def parse_args():
                 continue
             setattr(args, k, v)
 
+    if args.fname is None:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if args.log_date else ""
+        args.fname = f"{args.op}_{timestamp}"
     return args
 
