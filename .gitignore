@@ -171,15 +171,7 @@ data/shapenetchairs
 data/shapenetlamps
 data/MatrixCity
 data/imagenette
-data/drz/out
-data/drz2
-data/drz
-
-
-
-configs/
-
-debug.py
+# data/drz
 
 # Cached
 .pt 

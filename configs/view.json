@@ -1,0 +1,15 @@
+{
+  "op": "view",
+  
+  "seed": 0,
+  "dataset": "drz",
+  "data_path": "data/drz/",
+  "data_dirname": "balanced",
+  "mask_dirname": "g22_grid_bm110_ss11",
+  "downscale": 0.25,
+
+  "use_amp": true,
+  "checkpoint_path": "logs/4_models_seed-0",
+  "prefix": "best",
+  "ray_samples": 64
+}

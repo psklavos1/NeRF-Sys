@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime
 import os
 import subprocess
 import tempfile
@@ -120,10 +121,11 @@ def handle_config(config: dict):
       {
         "job_id": "nerf-001",   # optional, otherwise auto-assigned
         "op": "train" | "eval" | "view" | "video",
-        ... other nerf_runner args ...
+        ... other NeRF config parameters ...
       }
     """
     job_id = config.get("job_id", uuid.uuid4().hex[:12])
+    op = config.get("op", "train")
 
     thread = threading.Thread(
         target=run_nerf_thread,
@@ -145,10 +147,13 @@ def run_nerf_thread(cfg: dict, job_id: str) -> int:
     try:
         cfg = dict(cfg)
         cfg["job_id"] = job_id
+        date_str = datetime.now().strftime("%y%m%d")
+        run_tag = f"{date_str}_{op}"         # e.g. "251210_train_main"
+        cfg["fname"] = f"{job_id}/{run_tag}" # => logs/{job_id}/{tag}/
 
         tmp_path = write_temp_config(cfg)
         logger.info(f"[job_id={job_id}] Launching NeRF job with op='{op}'")
-
+        
         process = launch_process(
             script=NERF_PROC,
             config_path=tmp_path,
@@ -190,7 +195,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="NeRF Job Mediator")
     parser.add_argument("--broker", type=str, default="localhost:9092")
-    parser.add_argument("--topic", type=str, default="nerf_jobs")
+    parser.add_argument("--topic", type=str, default="nerfConfigs")
     parser.add_argument("--group_id", type=str, default="nerf-mediator")
     args = parser.parse_args()
 

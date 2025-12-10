@@ -1,0 +1,32 @@
+{
+  "op": "eval",
+
+  "seed": 0,
+  "dataset": "drz",
+  "data_path": "data/drz/",
+  "data_dirname": "balanced",
+  "mask_dirname": "g22_grid_bm110_ss11",
+  "downscale": 0.25,
+  
+  "near": 0.0,
+  "far": 100000,
+  "ray_samples":96,
+  "chunk_points": 4000000,
+  "boundary_margin": 1.0,
+  
+  "test_batch_size": 1,
+  "support_rays": 4000,
+
+  "use_amp": true,
+  "optimizer": "adam",
+  "lr": 0.0001,
+  "encoding_lr": 0.01,
+  "sigma_lr": 0.002,
+  "color_lr": 0.002,
+  "bg_lr": 0.001,
+
+  "checkpoint_path": "path/to/ckpt",
+  "prefix": "best",
+
+  "tto": "0,1,5"
+}

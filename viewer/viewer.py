@@ -136,6 +136,8 @@ def launch_viewer(
         "last_frame_u8": None,
     }
     training_state = {"target_steps": 0}  # Start/Continue semantics
+    viewer_state = {"running": True}
+
 
     # ----- Visuals (background, samples/eps, occupancy, modules) -----
     with server.add_gui_folder("Visuals", expand_by_default=False):
@@ -307,16 +309,18 @@ def launch_viewer(
 
         @btn_terminate.on_click
         def _(_evt):
-            # optional but sane: stop any running training first
+            # mark viewer as not running
+            viewer_state["running"] = False
+
             try:
                 ctrl.stop()
             except Exception:
                 pass
 
             CONSOLE.print(
-                "[bold red]⛔ Terminating viewer on user request...[/bold red]"
+                "[bold red] Terminating viewer on user request...[/bold red]"
             )
-            server.stop()
+            # server.stop()
 
 
     # ----- Training: widgets & controller -----
@@ -847,4 +851,6 @@ def launch_viewer(
     # ----- Wire viewer -----
     viewer = nerfview.Viewer(server=server, render_fn=nerf_render_fn, mode="rendering")
     viewer._training_tab_handles = training_handles
+    viewer.viewer_state = viewer_state
+
     return viewer

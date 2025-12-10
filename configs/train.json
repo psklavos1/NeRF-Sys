@@ -1,0 +1,55 @@
+{
+  "op": "train",
+  "save_step":1000,
+
+  "seed": 0,
+  "dataset": "drz",
+  "data_path": "data/drz/",
+  "data_dirname": "balanced",
+  "mask_dirname": "g22_grid_bm110_ss11",
+  "downscale": 0.25,
+
+
+  "near": 0.0,
+  "far": 100000,
+  "ray_samples":96,
+  "chunk_points": 4000000,
+  "boundary_margin": 1.0,
+
+  "batch_size": 3,
+  "test_batch_size": 1,
+  "support_rays": 4000,
+  "query_rays": 2000,
+  "cell_dim": 5,
+
+  "num_submodules": 4,
+  "sigma_depth": 2,
+  "color_depth": 2,
+  "dim_hidden": 64,
+  "color_hidden": 64,
+  
+  "log2_hashmap_size": 20,
+  "max_resolution": 4096,
+  
+  "no_bg_nerf": false,
+  "bg_hidden": 32,
+
+  "use_amp": true,
+  "optimizer": "adam",
+  "lr": 0.0001,
+  "encoding_lr": 0.01,
+  "sigma_lr": 0.002,
+  "color_lr": 0.002,
+  "bg_lr": 0.001,
+ 
+  "no_scheduler": false,
+  "decay_factor": 10.0,
+
+  "checkpoint_path": "",
+  "prefix": "best",
+  "use_stored_args": false,
+
+  "outer_steps": 20000,
+  "inner_iter": 8,
+  "inner_lr": 0.015
+}

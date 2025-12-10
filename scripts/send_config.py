@@ -56,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--topic",
         type=str,
-        default="nerf_jobs",  # <<< align with mediator
+        default="nerfConfigs",  # <<< align with mediator
         help="Topic to send the json formatted NeRF configuration.",
     )
     args = parser.parse_args()

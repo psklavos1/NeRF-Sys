@@ -55,13 +55,6 @@ def build_parser():
     parser.add_argument("--test_batch_size", type=int, default=1)
 
     # --- model
-    parser.add_argument(
-        "--decoder",
-        type=str,
-        default="mod_nerf",
-        choices=["siren", "mod_siren", "relu", "mod_nerf"],
-    )
-
     parser.add_argument("--num_submodules", type=int, default=4)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--sigma_depth", type=int, default=2)
@@ -74,13 +67,6 @@ def build_parser():
         default="random",
         choices=["white", "black", "none", "last_sample", "random"],
     )
-    parser.add_argument(
-        "--w0_type",
-        type=str,
-        default="uniform",
-        choices=["uniform", "orthogonal", "sparse"],
-    )
-    parser.add_argument("--w0", type=float, default=30.0)
 
     # --- nerf model specifics
     parser.add_argument(
@@ -146,12 +132,12 @@ def build_parser():
         choices=["maml", "fomaml", "reptile"],
     )
     parser.add_argument("--use_amp", action="store_true")
+    parser.add_argument("--max_test_tasks", type=int, default=4)
 
     # --- eval
-    parser.add_argument("--max_test_tasks", type=int, default=4)
     parser.add_argument(
         "--tto", type=str, default="16"
-    )  # in evaluation can give multiple like 4,6,8
+    )  
 
     # ----- video
     parser.add_argument(
@@ -166,23 +152,17 @@ def build_parser():
     type=int,
     default=900,  # seconds, e.g. 1 hour=3600; set -1 for "run forever"
     help="Max lifetime for viewer in seconds (-1 = no limit).")
+    parser.add_argument("--viewer_public_host", type=str, default="192.168.1.17")
     
     # --- extras
     parser.add_argument("--configPath", type=str, default=None)
     parser.add_argument("--num_workers", type=int, default=None)
-
     parser.add_argument("--log_date", action="store_true")
     parser.add_argument("--fname", default=None)
     parser.add_argument("--checkpoint_path", type=str, default=None)
     parser.add_argument("--use_stored_args", action="store_true")
     parser.add_argument("--prefix", type=str, default="best")  # best/last/step{i}
     parser.add_argument("--no_strict", action="store_true")
-    parser.add_argument("--incremental", action="store_true")
-    parser.add_argument("--expansion", action="store_true")
-    parser.add_argument(
-        "--order", type=str, default="colwise", choices=["rowwise", "colwise", "raster"]
-    )
-    parser.add_argument("--data_ratio", type=float, default=0.8)
 
     return parser
 
@@ -259,10 +239,10 @@ def parse_args():
             if k in cli_dests:
                 continue
             setattr(args, k, v)
-
+            
     if args.fname is None:
         from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") if args.log_date else ""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.fname = f"{args.op}_{timestamp}"
     return args
 

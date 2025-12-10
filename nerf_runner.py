@@ -15,7 +15,6 @@ Notes:
 
 import copy
 from pathlib import Path
-import time
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
@@ -177,6 +176,9 @@ def build_context(P, op: str) -> dict:
     g = torch.Generator()
     g.manual_seed(P.seed)
 
+    logger = Logger(fn=P.fname, today=False, rank=P.rank)
+    ctx["logger"] = logger
+
     # ---- per-op context ----
     if op == "train":
 
@@ -256,13 +258,7 @@ def build_context(P, op: str) -> dict:
     elif op in ["eval", "video"]:
         if not getattr(P, "checkpoint_path", None):
             raise ValueError("--checkpoint_path is required when --op eval")
-
-        ctx["logger"] = Logger(
-            "eval/" + getattr(P, "fname", P.fname),
-            today=False,
-            rank=getattr(P, "rank", 0),
-        )
-
+      
         # metadata-only eval loader (kept as you had it)
         data_path = Path(P.data_path) / "out" / P.data_dirname
         train_meta_list, test_meta_list = get_image_metadata(
@@ -287,13 +283,6 @@ def build_context(P, op: str) -> dict:
         # For viewing, we optionally load a checkpoint and build a small support iterator (episodic or rays)
         if P.checkpoint_path is None:
             raise ValueError("--checkpoint_path needs to be added")
-
-        ctx["logger"] = Logger(
-            "viewer/" + getattr(P, "fname", "viewer"),
-            today=False,
-            rank=getattr(P, "rank", 0),
-        )
-        # model = torch.compile(model, mode="reduce-overhead")
 
         load_model_checkpoint(P, model, ctx["logger"])
 
@@ -321,13 +310,9 @@ def train(ctx: dict):
 
     P = ctx["P"]
 
-    train_func, fname, today = train_setup(P.algo, P)
-    P.fname = fname
+    train_func, _, _ = train_setup(P.algo, P)
     test_func = test_setup(P.algo, P)
 
-    ctx["logger"] = Logger(
-        fname, today=today, rank=P.rank
-    )
     ctx["logger"].log(P)
     ctx["logger"].log(ctx["model"])
 
@@ -451,7 +436,9 @@ def view(ctx: dict):
     """Spin up the lightweight Viser viewer bound to the current model."""
     P = ctx["P"]
     from viewer.viewer import launch_viewer
-    server = launch_viewer(
+    import time
+
+    viewer = launch_viewer(
         P=P,
         model=ctx["model"],
         coordinate_info=ctx["coordinate_info"],
@@ -459,28 +446,40 @@ def view(ctx: dict):
         device=ctx["device"],
         host=str(getattr(P, "viewer_host", "0.0.0.0")),
         port=int(getattr(P, "viewer_port", 7070)),
-        open_browser=bool(int(getattr(P, "viewer_open_browser", 1))),
+        open_browser=bool(int(getattr(P, "viewer_open_browser", 0))),
     )
 
     timeout = getattr(P, "viewer_timeout", -1)
     if timeout is None:
         timeout = -1
 
+
     if timeout > 0:
         end = time.time() + timeout
-        while time.time() < end:
+        while time.time() < end and viewer.viewer_state["running"]:
             time.sleep(1.0)
-        ctx["logger"].log("[VIEW] Viewer timeout reached, shutting down.")
+
+        if not viewer.viewer_state["running"]:
+            ctx["logger"].log("[VIEW] Viewer stopped by use.")
+        else:
+            ctx["logger"].log("[VIEW] Viewer timeout reached, shutting down.")
         try:
-            server.stop() 
+            viewer.stop()
         except Exception:
             pass
     else:
         try:
             while True:
                 time.sleep(1.0)
+                if not viewer.viewer_state["running"]:
+                    ctx["logger"].log("[VIEW] Viewer stopped by user (server.stop()).")
+                    break
         except KeyboardInterrupt:
             ctx["logger"].log("[VIEW] Viewer interrupted, shutting down.")
+            try:
+                viewer.stop()
+            except Exception:
+                pass
     
 # -----------------------------
 # Entrypoint

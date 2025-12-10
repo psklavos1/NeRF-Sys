@@ -1,0 +1,6 @@
+==== GLOBAL ====
+global.min = [-0.046124, -1.1, -1.1]
+global.max = [0.497646, 1.1, 1.1]
+
+==== PER-EXPERT LOCAL BOXES (normalized DRB) ====
+[000] count=200521285632  centroid=[-0.0, 0.0, 0.0]  min=[-0.046124, -1.1, -1.1]  max=[0.497646, 1.1, 1.1]
