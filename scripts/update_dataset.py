@@ -42,10 +42,7 @@ import pymap3d as pm
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from data.colmap_utils import qvec2rotmat, read_model, get_cam_intrinsics
 from data.transformations import ellipsoid_wgs84, ecef_to_enu_rot, ENU_TO_DRB, RDF_TO_RUB
-
-
 # -------------------- CLI --------------------
-
 
 def parse_args() -> Namespace:
     p = argparse.ArgumentParser(

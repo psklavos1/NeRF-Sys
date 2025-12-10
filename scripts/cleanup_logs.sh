@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LOG_DIR="server_logs"
+LOG_DIR="logs"
 
 if [ ! -d "$LOG_DIR" ]; then
   echo "Log directory $LOG_DIR does not exist."

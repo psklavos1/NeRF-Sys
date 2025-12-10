@@ -1,6 +1,6 @@
 {
   "op": "train",
-  "save_step":1000,
+  "save_step":5,
 
   "seed": 0,
   "dataset": "drz",
@@ -49,7 +49,7 @@
   "prefix": "best",
   "use_stored_args": false,
 
-  "outer_steps": 20000,
+  "outer_steps": 5,
   "inner_iter": 8,
   "inner_lr": 0.015
 }

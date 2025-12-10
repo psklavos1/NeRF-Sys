@@ -896,3 +896,15 @@ def load_scene_boxes(
         local_boxes.append(SceneBox(aabb=aabb_expert))
 
     return global_box, local_boxes
+
+def resolve_logdir_from_job_id(job_id: str, logs_root: str = "logs") -> str:
+    base = Path(logs_root) / job_id
+    if not base.exists():
+        raise FileNotFoundError(f"No logs found for job_id={job_id} under {logs_root}")
+    runs = sorted(
+        [d for d in base.iterdir() if d.is_dir()],
+        key=lambda p: p.name,
+    )
+    if not runs:
+        raise FileNotFoundError(f"No runs found for job_id={job_id} under {base}")
+    return str(runs[-1])   # latest by name (date + optional _vN)

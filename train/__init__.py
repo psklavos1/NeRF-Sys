@@ -23,7 +23,7 @@ def setup(algo, P):
     # Dynamically import the appropriate train_step function
     if algo in ["fomaml", "maml", "reptile"]:
         if P.data_type == "ray":
-            from train.gradient_based.nerf_maml import train_step_ray as train_step
+            from train.maml import train_step_ray as train_step
     else:
         raise NotImplementedError("Only gradient-based modes are implemented.")
 

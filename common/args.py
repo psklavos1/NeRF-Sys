@@ -166,7 +166,6 @@ def build_parser():
 
     return parser
 
-
 # -------------------------
 # CLI presence detection
 # -------------------------

@@ -263,7 +263,7 @@ def runtime_evaluate_model(
     scorer_lpips = lpips.LPIPS(net="alex").to(device)
     meter = MetricLogger(delimiter="  ")
 
-    out_root_rendered = Path("logs/eval") / Path(P.fname) / "rendered"
+    out_root_rendered = Path("logs") / Path(P.fname) / "rendered"
     out_pred = out_root_rendered / ("pred" + str(getattr(P, "tto", steps)))
     out_gt = out_root_rendered / "gt"
     out_gt.mkdir(parents=True, exist_ok=True)

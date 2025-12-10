@@ -18,8 +18,8 @@ class KafkaConsumer:
     - Returns the decoded Python object (usually a dict) or None on failure.
     """
 
-    def __init__(self, topic: str, config: Optional[Dict[str, Any]] = None) -> None:
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, topic: str, config: Optional[Dict[str, Any]] = None, logger=None) -> None:
+        self.logger = logging.getLogger(__name__) if logger is None else logger
         config = dict(config) if config is not None else {}
 
         self.topic = topic

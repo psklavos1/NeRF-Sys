@@ -5,7 +5,7 @@ def setup(algo, P):
     if algo in ["fomaml", "maml"]:
         # Use standard MAML-style evaluation functions
         if P.data_type == "ray":
-            from evals.gradient_based.nerf_eval import validate_nerf_model as test_func  
+            from evals.maml import validate_nerf_model as test_func  
         else:
             raise NotImplementedError(f"MAML evaluation not implemented for data_type: {P.data_type}")
     return test_func

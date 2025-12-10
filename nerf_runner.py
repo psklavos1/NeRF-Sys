@@ -32,13 +32,12 @@ from utils import (
     load_scene_boxes,
 )
 from common.utils import get_optimizer
-from utils import load_model_checkpoint
+from utils import load_model_checkpoint, resolve_logdir_from_job_id
 from data.dataset import get_dataset, get_image_metadata
 from data.image_metadata import ImageMetaDataset
 from data.multi_loader import MultiLoader
 from models.inr.meta_container import MetaContainer
-
-from evals.gradient_based.video_gen import render_video
+from evals.video_gen import render_video
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -72,10 +71,16 @@ def build_context(P, op: str) -> dict:
         "optimizer": None,
         "global_box": None,
         "expert_box_list": None,
-        # viewer-specific (optional)
         "support_iter": None,
     }
 
+    # resolve checkpoint path from job ID if needed
+    if getattr(P, "checkpoint_path", None):
+        chkpt = Path(P.checkpoint_path)
+        if not chkpt.is_dir():
+            P.checkpoint_path = resolve_logdir_from_job_id(P.checkpoint_path)
+    print("Using checkpoint path: ", P.checkpoint_path)
+    
     # ---- clustering meta / SceneBox ----
     mask_dir = Path(P.data_path) / "out" / P.data_dirname / "masks" / P.mask_dirname
     print(mask_dir)
@@ -115,17 +120,9 @@ def build_context(P, op: str) -> dict:
         "dir_encoding": P.dir_encoding,
         "color_hidden": P.color_hidden,
         "use_sigmoid_rgb": True,
-        # Instant-NGP private high-freq hash:
         "hash_enc_conf": hash_enc_conf,
     }
 
-    shared_encoder_conf = {
-        "levels": getattr(P, "shared_levels", 10),
-        "features_per_level": getattr(P, "shared_features_per_level", 2),
-        "log2_hashmap_size": getattr(P, "shared_log2_hashmap_size", 16),
-        "min_res": getattr(P, "shared_min_res", 16),
-        "max_res": getattr(P, "shared_max_res", 512),
-    }
     # ---- occupancy config for the container ----
     occ_conf = {
             "use_occ": P.use_occ,
@@ -165,10 +162,6 @@ def build_context(P, op: str) -> dict:
         bg_encoding=getattr(P, "bg_encoding", "spherical"),
         # occupancy
         occ_conf=occ_conf,
-        # shared low-freq hash prior (container-owned)
-        use_shared_encoder=False,
-        shared_encoder_conf=shared_encoder_conf,
-        # forwarded to experts
         **nerf_kwargs,
     ).to(device)
 
@@ -256,17 +249,16 @@ def build_context(P, op: str) -> dict:
         ctx["optimizer"] = get_optimizer(P, ctx["model"])
 
     elif op in ["eval", "video"]:
+        
         if not getattr(P, "checkpoint_path", None):
             raise ValueError("--checkpoint_path is required when --op eval")
       
         # metadata-only eval loader (kept as you had it)
         data_path = Path(P.data_path) / "out" / P.data_dirname
-        train_meta_list, test_meta_list = get_image_metadata(
+        _, test_meta_list = get_image_metadata(
             data_path, P.downscale, only_test=False
         )
-        # print(f"The list {test_meta_list} has len {len(test_meta_list)}")
-        # print(f"The Train  has len {len(train_meta_list)}, : {train_meta_list[0]}")
-        # input()
+       
         test_meta = ImageMetaDataset(test_meta_list)
         ctx["test_loader"] = DataLoader(
             test_meta,
@@ -330,7 +322,7 @@ def train(ctx: dict):
 
 
 def eval(ctx: dict):
-    from evals.gradient_based.nerf_eval import runtime_evaluate_model as test_func
+    from evals.maml import runtime_evaluate_model as test_func
 
     P = ctx["P"]
     model = ctx["model"]
