@@ -14,14 +14,12 @@ from torchvision import datasets
 from torch.utils.data import Dataset
 from traitlets import List
 
-from .vox2_preprocess import get_logger
 from .ram_rays_dataset import RamRaysDataset
 from .image_metadata import ImageMetadata
 from utils import discover_cluster_cells
 
 DATA_DIR = "./data"
 VOXCELEB_PATH = DATA_DIR + "/vox2_mp4"
-logging = get_logger(__name__)
 
 
 class ImgDataset(Dataset):
@@ -40,95 +38,6 @@ class ImgDataset(Dataset):
             "imgs": x,
         }
 
-
-class FFHQ(Dataset):
-    def __init__(self, root_path, list_file, transform=None):
-        self.root_path = root_path
-        self.transform = transform
-        self.img_list = []
-        with open(list_file, "r") as f:
-            for line in f.readlines():
-                self.img_list.append(line.strip())
-
-    def __len__(self):
-        return len(self.img_list)
-
-    def __getitem__(self, idx):
-        img_name = self.img_list[idx]
-        folder_name = img_name[:2] + "000"
-        img_path = (
-            self.root_path.joinpath("imgs").joinpath(folder_name).joinpath(img_name)
-        )
-        img = Image.open(img_path)
-        if self.transform:
-            img = self.transform(img)
-        return {
-            "imgs": img,
-        }
-
-
-class Imagenette(Dataset):
-    def __init__(self, root_path, train=True, transform=None):
-        self.root_path = root_path
-        self.transform = transform
-        self.train = train
-        img_path = self.root_path.joinpath("train" if self.train else "val")
-        self.imgs = [
-            Path(folder).joinpath(file)
-            for folder, _, files in os.walk(img_path)
-            for file in files
-        ]
-
-    def __len__(self):
-        return len(self.imgs)
-
-    def __getitem__(self, index):
-        img = Image.open(self.imgs[index]).convert("RGB")
-
-        if self.transform:
-            img = self.transform(img)
-        return {
-            "imgs": img,
-        }
-
-
-class FrameDataset(Dataset):
-    def __init__(self, video_paths, frame_num=4, transform=None):
-        super().__init__()
-        self.video_paths = video_paths
-        self.frame_num = frame_num
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.video_paths)
-
-    def __getitem__(self, idx):
-        folder, files = self.video_paths[idx]
-        try:
-            files = sorted([file for file in files if file.endswith(".jpg")])
-            if len(files) <= 16 and len(files) >= self.frame_num:
-                convert_img = lambda x: np.array(Image.open(x).convert("RGB")).astype(
-                    np.float64
-                )
-                x = [
-                    convert_img(os.path.join(folder, files[i]))
-                    for i in range(len(files))
-                ]
-
-                if self.transform:
-                    x = torch.stack(
-                        [self.transform(x[i]) for i in range(self.frame_num)]
-                    )
-
-                return {
-                    "videos": x[: self.frame_num],
-                }
-            else:
-                return None
-
-        except Exception as e:
-            logging.info(f"Error in {folder}: {e}")
-            return None
 
 
 def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
@@ -188,6 +97,10 @@ def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
                 num_workers=P.num_workers,
                 **kwargs,
             )
+            if only_test:
+                return test_set
+
+            return train_set, test_set
 
         else:
             # ====== Masked, per-cell subdatasets (Mega-NeRF style) ======
@@ -264,119 +177,8 @@ def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
             P.dim_in, P.dim_out = 6, 4
             P.data_type = "ray"
             return train_sets, val_sets
-
-    elif dataset == "celeba":
-        T_base = T.Compose(
-            [
-                T.Resize(P.resolution),
-                T.CenterCrop(P.resolution),
-                T.Pad(1),
-                T.ToTensor(),
-            ]
-        )
-        P.resolution += 2
-        train_set = ImgDataset(
-            datasets.CelebA(
-                DATA_DIR,
-                split="train",
-                target_type="attr",
-                transform=T_base,
-                download=True,
-            )
-        )
-        test_set = ImgDataset(
-            datasets.CelebA(
-                DATA_DIR,
-                split="test",
-                target_type="attr",
-                transform=T_base,
-                download=True,
-            )
-        )
-        P.data_type = "img"
-        P.dim_in, P.dim_out = 2, 3
-        P.data_size = (3, P.resolution, P.resolution)
-
-    elif dataset == "ffhq":
-        root_path = Path(DATA_DIR) / "ffhq"
-        train_list_file = root_path / "ffhqtrain.txt"
-        test_list_file = root_path / "ffhqvalidation.txt"
-
-        T_base = T.Compose(
-            [
-                T.Resize(P.resolution),
-                T.CenterCrop(P.resolution),
-                T.ToTensor(),
-            ]
-        )
-        train_set = FFHQ(root_path, train_list_file, transform=T_base)
-        test_set = FFHQ(root_path, test_list_file, transform=T_base)
-
-        P.data_type = "img"
-        P.dim_in, P.dim_out = 2, 3
-        P.data_size = (3, P.resolution, P.resolution)
-
-    elif dataset == "imagenette":
-        root_path = Path(DATA_DIR) / "imagenette"
-        T_base = T.Compose(
-            [
-                T.Resize(P.resolution),
-                T.CenterCrop(P.resolution),
-                T.ToTensor(),
-            ]
-        )
-        train_set = Imagenette(root_path, train=True, transform=T_base)
-        test_set = Imagenette(root_path, train=False, transform=T_base)
-
-        P.data_type = "img"
-        P.dim_in, P.dim_out = 2, 3
-        P.data_size = (3, P.resolution, P.resolution)
-
-    elif dataset == "voxceleb":
-        dataset_path = Path(VOXCELEB_PATH)
-        train_vids_path = dataset_path / "dev" / "mp4"
-        test_vids_path = dataset_path / "test" / "mp4"
-
-        train_video_list, test_video_list = [], []
-        for root, dirs, files in os.walk(train_vids_path):
-            if len(files) >= P.num_submodules:
-                train_video_list.append((root, files))
-        logging.info(f"Number of train videos: {len(train_video_list)}")
-
-        for root, dirs, files in os.walk(test_vids_path):
-            if len(files) >= P.num_submodules:
-                test_video_list.append((root, files))
-        logging.info(f"Number of test videos: {len(test_video_list)}")
-
-        transform = T.Compose(
-            [
-                T.ToTensor(),
-                T.Lambda(lambda x: x.float() / 255.0),
-                T.Resize(P.resolution),
-                T.CenterCrop(P.resolution),
-            ]
-        )
-
-        train_set = FrameDataset(
-            train_video_list,
-            transform=transform,
-            frame_num=P.num_submodules,
-        )
-        test_set = FrameDataset(
-            test_video_list,
-            transform=transform,
-            frame_num=P.num_submodules,
-        )
-        P.data_type = "video"
-        P.dim_in, P.dim_out = 3, 3
-        P.data_size = (P.num_submodules, 3, P.resolution, P.resolution)
     else:
         raise NotImplementedError()
-
-    if only_test:
-        return test_set
-
-    return train_set, test_set
 
 
 # * Helpers

@@ -6,26 +6,51 @@ import uuid
 import json
 import traceback
 import threading
+import logging
+from pathlib import Path
 
-from server.kafka import KafkaConsumer
-from server.kafka.topic_manager import KafkaTopicManager
-from server.log_manager import LogManager
-
-# ---------------------------------------------------------------------
-# Constants / Globals
-# ---------------------------------------------------------------------
+from common.kafka import KafkaConsumer
+from common.kafka.topic_manager import KafkaTopicManager
 
 NERF_PROC = "nerf_runner.py"
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-log_manager: LogManager | None = None
-mediator_logger = None
+logger = logging.getLogger("mediator")
+
+
+# ---------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------
+def setup_logging():
+    # Use the same logs/ directory convention as your internal Logger
+    logs_dir = Path("logs")
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = logs_dir / "mediator.log"
+
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    fmt = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    # file handler: logs/mediator.log
+    file_handler = logging.FileHandler(str(log_path), mode="w")
+    file_handler.setFormatter(fmt)
+    logger.addHandler(file_handler)
+
+    # optional console output
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    logger.addHandler(console)
+
+    logger.info(f"Mediator logging to {log_path}")
 
 
 # ---------------------------------------------------------------------
 # Kafka listening
 # ---------------------------------------------------------------------
-
 def listen_for_config(broker: str, topic: str, group_id: str):
     consumer_config = {
         "bootstrap.servers": broker,
@@ -34,52 +59,50 @@ def listen_for_config(broker: str, topic: str, group_id: str):
         "enable.auto.commit": True,
     }
     kafka_consumer = KafkaConsumer(topic, consumer_config)
-    mediator_logger.info(f"Listening for NeRF configs on topic '{topic}'...")
+    logger.info(f"Listening for NeRF configs on topic '{topic}'...")
 
     try:
         while True:
             message = kafka_consumer.receive()
             if message is None:
                 continue
-
-            mediator_logger.info("Received new NeRF configuration")
-            log_manager.enforce_capacity()
+            logger.info("Received new NeRF configuration")
             yield message
-            mediator_logger.info("Waiting for new configurations...")
     finally:
         kafka_consumer.close()
 
 
 # ---------------------------------------------------------------------
-# Job handling
+# Process launching
 # ---------------------------------------------------------------------
-def launch_process(script, config_path=None, cwd=None, text_logs=False):
-    try:
-        if isinstance(script, list):
-            cmd = script  # custom command like ./waf ...
-        elif isinstance(script, str):
-            cmd = ["python", script]
-            if config_path:
-                cmd.extend(["--configPath", config_path])
-        else:
-            raise TypeError("script must be a str or list")
+def launch_process(script, config_path=None, cwd=None):
+    """
+    Launch nerf_runner.py with --configPath <config_path>.
 
-        env = None
-        if cwd is not None:
-            env = os.environ.copy()
-            env["PYTHONPATH"] = os.path.abspath(cwd)
+    stdout/stderr are sent to DEVNULL so the mediator terminal stays clean.
+    The NeRF code logs to its own files via your internal Logger.
+    """
+    if isinstance(script, list):
+        cmd = script
+    elif isinstance(script, str):
+        cmd = ["python", script]
+        if config_path:
+            cmd.extend(["--configPath", config_path])
+    else:
+        raise TypeError("script must be a str or list")
 
-        return subprocess.Popen(
-            cmd,
-            text=text_logs,
-            bufsize=1 if text_logs else -1,
-            stdout=subprocess.PIPE if text_logs else None,
-            stderr=subprocess.STDOUT if text_logs else None,
-            cwd=cwd,
-            env=env,
-        )
-    except Exception as e:
-        print(f"Exception Launching process: {e}")
+    env = None
+    if cwd is not None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.path.abspath(cwd)
+
+    return subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=cwd,
+        env=env,
+    )
 
 
 def write_temp_config(cfg: dict) -> str:
@@ -88,11 +111,12 @@ def write_temp_config(cfg: dict) -> str:
         return tmp.name
 
 
+# ---------------------------------------------------------------------
+# Job handling
+# ---------------------------------------------------------------------
 def handle_config(config: dict):
     """
-    Handle a single NeRF job configuration.
-
-    Expected shape (example):
+    Expected config shape (example):
       {
         "job_id": "nerf-001",   # optional, otherwise auto-assigned
         "op": "train" | "eval" | "view" | "video",
@@ -100,9 +124,6 @@ def handle_config(config: dict):
       }
     """
     job_id = config.get("job_id", uuid.uuid4().hex[:12])
-    op = config.get("op", "train")
-
-    mediator_logger.info(f"[job_id={job_id}] Launching NeRF job with op='{op}'")
 
     thread = threading.Thread(
         target=run_nerf_thread,
@@ -111,47 +132,44 @@ def handle_config(config: dict):
     )
     thread.start()
 
-    mediator_logger.info(f"[job_id={job_id}] NeRF job thread started.")
-
 
 def run_nerf_thread(cfg: dict, job_id: str) -> int:
     """
-    Launch a NeRF runner process (nerf_runner.py --config <tmp>) and wait for it.
+    Launch a NeRF runner process and wait for it in a background thread.
+
+    Mediator only logs start + exit code. All detailed logs are handled
+    inside the NeRF pipeline (your internal Logger).
     """
     tmp_path = None
-    job_logger = log_manager.get_job_logger(job_id=job_id, name="nerf")
-
+    op = cfg.get("op", "train")
     try:
-        cfg = dict(cfg)  # shallow copy so we don't mutate Kafka message
+        cfg = dict(cfg)
         cfg["job_id"] = job_id
 
-        # write temp config JSON for nerf_runner.py
         tmp_path = write_temp_config(cfg)
+        logger.info(f"[job_id={job_id}] Launching NeRF job with op='{op}'")
 
-        job_logger.info(f"[job_id={job_id}] Starting nerf_runner.py with config:\n{cfg}")
-        
-        # input()
         process = launch_process(
             script=NERF_PROC,
             config_path=tmp_path,
             cwd=ROOT_DIR,
-            text_logs=False,  # adjust if your launch_process supports this
         )
-
         process.wait()
 
         if process.returncode != 0:
-            job_logger.error(
-                f"[job_id={job_id}] ❌ nerf_runner exited with code: {process.returncode}"
+            logger.error(
+                f"[job_id={job_id}] NeRF job FAILED (op='{op}', code={process.returncode})"
             )
         else:
-            job_logger.info(f"[job_id={job_id}] ✅ NeRF job completed successfully.")
+            logger.info(
+                f"[job_id={job_id}] NeRF job COMPLETED (op='{op}', code=0)"
+            )
 
         return process.returncode
 
     except Exception as e:
-        job_logger.error(f"[job_id={job_id}] ❌ Exception in NeRF job: {e}")
-        job_logger.error(traceback.format_exc())
+        logger.error(f"[job_id={job_id}] NeRF job ERROR (op='{op}'): {e}")
+        logger.error(traceback.format_exc())
         return -1
 
     finally:
@@ -159,7 +177,7 @@ def run_nerf_thread(cfg: dict, job_id: str) -> int:
             try:
                 os.remove(tmp_path)
             except OSError:
-                job_logger.warning(
+                logger.warning(
                     f"[job_id={job_id}] Could not remove temp config: {tmp_path}"
                 )
 
@@ -167,36 +185,26 @@ def run_nerf_thread(cfg: dict, job_id: str) -> int:
 # ---------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------
-
-
 def main():
-    global log_manager, mediator_logger
+    setup_logging()
 
     parser = argparse.ArgumentParser(description="NeRF Job Mediator")
     parser.add_argument("--broker", type=str, default="localhost:9092")
     parser.add_argument("--topic", type=str, default="nerf_jobs")
     parser.add_argument("--group_id", type=str, default="nerf-mediator")
-    parser.add_argument("--log_capacity", type=int, default=10)
-
     args = parser.parse_args()
 
-    log_manager = LogManager(capacity=args.log_capacity)
-    mediator_logger = log_manager.get_mediator_logger()
-
-    mediator_logger.info("NeRF Mediator starting...")
-    mediator_logger.info(
-        f"Kafka Broker: {args.broker} | Topic: {args.topic} | "
-        f"Group: {args.group_id} | Log capacity: {args.log_capacity}"
+    logger.info("NeRF Mediator starting...")
+    logger.info(
+        f"Kafka Broker: {args.broker} | Topic: {args.topic} | Group: {args.group_id}"
     )
-    
-     # 🔹 ensure topic exists
-    topic_mgr = KafkaTopicManager(args.broker, logger=mediator_logger)
+
+    topic_mgr = KafkaTopicManager(args.broker, logger=logger)
     topic_mgr.create_topic(args.topic)
-    
+
     for config in listen_for_config(args.broker, args.topic, args.group_id):
-        # 'config' is the JSON payload consumed from Kafka
         if not isinstance(config, dict):
-            mediator_logger.error(f"Ignoring non-dict message: {config}")
+            logger.error(f"Ignoring non-dict message: {config}")
             continue
         handle_config(config)
 

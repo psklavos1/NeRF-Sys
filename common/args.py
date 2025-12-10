@@ -160,6 +160,13 @@ def build_parser():
         default="full_coverage",
         choices=["spiral_in", "turntable", "east_west", "north_south", "full_coverage"],
     )
+    
+    parser.add_argument(
+    "--viewer_timeout",
+    type=int,
+    default=900,  # seconds, e.g. 1 hour=3600; set -1 for "run forever"
+    help="Max lifetime for viewer in seconds (-1 = no limit).")
+    
     # --- extras
     parser.add_argument("--configPath", type=str, default=None)
     parser.add_argument("--num_workers", type=int, default=None)

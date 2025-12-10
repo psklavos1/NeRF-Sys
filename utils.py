@@ -15,7 +15,6 @@ import torch.nn as nn
 import numpy as np
 import torch
 from torchvision.utils import make_grid
-from torch.utils.data.dataloader import default_collate
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
 from einops import rearrange
@@ -37,7 +36,7 @@ class Logger(object):
         rank (int): Rank for distributed training (only rank 0 logs).
     """
 
-    def __init__(self, fn, ask=True, today=False, rank=0):
+    def __init__(self, fn, today=False, rank=0):
         self.rank = rank
         self.log_path = "logs/"
         self.logdir = None
@@ -48,25 +47,26 @@ class Logger(object):
             self.today = today
 
             logdir = self._make_dir(fn)
-            if not os.path.exists(logdir):
-                os.makedirs(logdir)
-
-            if len(os.listdir(logdir)) != 0 and ask:
-                ans = ""
-                while ans not in ["y", "Y", "n", "N"]:
-                    try:
-                        ans = input(
-                            "log_dir is not empty. All data inside log_dir will be deleted. "
-                            "Will you proceed [y/N]? "
-                        )
-                    except ValueError:
-                        pass
-
-                    if ans in ["y", "Y"]:
-                        shutil.rmtree(logdir)
-                    else:
-                        exit(1)
+            logdir = self._resolve_unique_dir(logdir)
+            os.makedirs(logdir, exist_ok=True)
             self.set_dir(logdir)
+            
+    def _resolve_unique_dir(self, path: str) -> str:
+        """
+        If `path` exists and is not empty, return path_v1, path_v2, ... 
+        until a free name is found.
+        """
+        if not os.path.exists(path) or len(os.listdir(path)) == 0:
+            return path  # free or empty
+        
+        base = path
+        idx = 1
+        while True:
+            new_path = f"{base}_v{idx}"
+            if not os.path.exists(new_path):
+                return new_path
+            idx += 1
+
 
     def _make_dir(self, fn):
         if self.today:

@@ -259,7 +259,6 @@ def build_context(P, op: str) -> dict:
 
         ctx["logger"] = Logger(
             "eval/" + getattr(P, "fname", P.fname),
-            ask=False,
             today=False,
             rank=getattr(P, "rank", 0),
         )
@@ -291,7 +290,6 @@ def build_context(P, op: str) -> dict:
 
         ctx["logger"] = Logger(
             "viewer/" + getattr(P, "fname", "viewer"),
-            ask=False,
             today=False,
             rank=getattr(P, "rank", 0),
         )
@@ -328,7 +326,7 @@ def train(ctx: dict):
     test_func = test_setup(P.algo, P)
 
     ctx["logger"] = Logger(
-        fname, ask=P.checkpoint_path is None, today=today, rank=P.rank
+        fname, today=today, rank=P.rank
     )
     ctx["logger"].log(P)
     ctx["logger"].log(ctx["model"])
@@ -387,11 +385,9 @@ def eval(ctx: dict):
         )
 
     df = pd.DataFrame(all_results).sort_values("tto_steps").reset_index(drop=True)
-    print(df)
     latex_table = df.to_latex(index=False, float_format="%.3f", escape=True)
+    print(df)
     print(latex_table)
-    with open("tto_results_table.txt", "w") as f:
-        f.write(latex_table)
 
 
 def video(ctx: dict):
@@ -460,34 +456,35 @@ def view(ctx: dict):
         model=ctx["model"],
         coordinate_info=ctx["coordinate_info"],
         scene_box=ctx["global_box"],  # (2,3) tensor
-        # support_source=ctx['trainloader'],
         device=ctx["device"],
-        host=str(getattr(P, "viewer_host", "127.0.0.1")),
+        host=str(getattr(P, "viewer_host", "0.0.0.0")),
         port=int(getattr(P, "viewer_port", 7070)),
         open_browser=bool(int(getattr(P, "viewer_open_browser", 1))),
     )
 
-    # Keep the process alive
-    try:
-        while True:
+    timeout = getattr(P, "viewer_timeout", -1)
+    if timeout is None:
+        timeout = -1
+
+    if timeout > 0:
+        end = time.time() + timeout
+        while time.time() < end:
             time.sleep(1.0)
-    except KeyboardInterrupt:
-        pass
-
-    # from viewer.app import ViewerApp, ViewerConfig
-    # cfg = ViewerConfig(
-    #     model=ctx["model"],P=ctx["P"], device=ctx["device"], scene_box=ctx["global_box"], coordinates_info=ctx["coordinates_info"],
-    #     rub_to_drb=True, host='127.0.0.1', port=7070, open_browser=True)
+        ctx["logger"].log("[VIEW] Viewer timeout reached, shutting down.")
+        try:
+            server.stop() 
+        except Exception:
+            pass
+    else:
+        try:
+            while True:
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            ctx["logger"].log("[VIEW] Viewer interrupted, shutting down.")
     
-    # viewer_app = ViewerApp(cfg)
-    # viewer_app.run(cfg)
-
-
 # -----------------------------
 # Entrypoint
 # -----------------------------
-
-
 def main():
     P = parse_args()  # contains --op and everything else
     ctx = build_context(P, P.op)

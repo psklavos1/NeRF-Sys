@@ -267,13 +267,17 @@ def launch_viewer(
     def _setup_camera_gui(client):
         with client.gui.add_folder("Controls", expand_by_default=False):
             btn_center = client.gui.add_button("Look At Center")
-            btn_level = client.gui.add_button("Level Horizon")
             btn_front = client.gui.add_button("Look Front")
             btn_right = client.gui.add_button("Look Right")
             btn_bottom = client.gui.add_button("Look Down")
             btn_in = client.gui.add_button("Dolly In")
             btn_out = client.gui.add_button("Dolly Out")
             btn_snap = client.gui.add_button("Save Screenshot")
+
+            btn_terminate = client.gui.add_button(
+                "Terminate Viewer",
+                color="red", 
+            )
 
         def _bind(btn, fn):
             @btn.on_click
@@ -283,16 +287,9 @@ def launch_viewer(
                     _set_pose(client, fn(c2w.astype(np.float32)))
 
         _bind(btn_center, lambda c2w: pose_look_center(c2w, level=False))
-        _bind(btn_level, lambda c2w: pose_look_center(c2w, level=True))
-        _bind(
-            btn_front, lambda c2w: pose_snap_dir(c2w, np.array([0, 0, -1], np.float32))
-        )
-        _bind(
-            btn_right, lambda c2w: pose_snap_dir(c2w, np.array([1, 0, 0], np.float32))
-        )
-        _bind(
-            btn_bottom, lambda c2w: pose_snap_dir(c2w, np.array([0, -1, 0], np.float32))
-        )
+        _bind(btn_front, lambda c2w: pose_snap_dir(c2w, np.array([0, 0, -1], np.float32)))
+        _bind(btn_right, lambda c2w: pose_snap_dir(c2w, np.array([1, 0, 0], np.float32)))
+        _bind(btn_bottom, lambda c2w: pose_snap_dir(c2w, np.array([0, -1, 0], np.float32)))
         _bind(btn_in, lambda c2w: pose_dolly(c2w, forward=True))
         _bind(btn_out, lambda c2w: pose_dolly(c2w, forward=False))
 
@@ -307,6 +304,20 @@ def launch_viewer(
                 CONSOLE.print(
                     f"[bold green]📸 Snapshot saved →[/bold green] [cyan]{path}[/cyan]"
                 )
+
+        @btn_terminate.on_click
+        def _(_evt):
+            # optional but sane: stop any running training first
+            try:
+                ctrl.stop()
+            except Exception:
+                pass
+
+            CONSOLE.print(
+                "[bold red]⛔ Terminating viewer on user request...[/bold red]"
+            )
+            server.stop()
+
 
     # ----- Training: widgets & controller -----
     with server.add_gui_folder("Operation Mode", expand_by_default=False):
