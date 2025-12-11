@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-
 import os
 import sys
 import json
 import argparse
 import logging
 
-# Keep together
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from common.kafka import KafkaProducer, KafkaTopicManager
 
@@ -14,14 +12,16 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+
 def load_config(file_path):
-    
+
     try:
         with open(file_path, "r") as file:
             return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logging.error(f"Error loading configuration: {e}")
         return None
+
 
 def main(args):
     config_path, broker, topic = args.configPath, args.broker, args.topic

@@ -36,15 +36,10 @@
 
 
 import collections
-import math
 import os
 import struct
-from typing import List, Literal, Optional, Tuple
-from jaxtyping import Float
 
 import numpy as np
-import torch
-from torch import Tensor
 
 CameraModel = collections.namedtuple(
     "CameraModel", ["model_id", "model_name", "num_params"]
@@ -75,7 +70,6 @@ CAMERA_MODEL_IDS = dict(
 )
 
 
-# * Utility functions for handling colmap data
 def qvec2rotmat(qvec):
     return np.array(
         [
@@ -104,13 +98,7 @@ class Image(BaseImage):
 
 
 def read_next_bytes(fid, num_bytes, format_char_sequence, endian_character="<"):
-    """Read and unpack the next bytes from a binary file.
-    :param fid:
-    :param num_bytes: Sum of combination of {2, 4, 8}, e.g. 2, 6, 16, 30, etc.
-    :param format_char_sequence: List of {c, e, f, d, h, H, i, I, l, L, q, Q}.
-    :param endian_character: Any of {@, =, <, >, !}
-    :return: Tuple of read and unpacked values.
-    """
+    """Read and unpack the next `num_bytes` from a binary file using struct."""
     data = fid.read(num_bytes)
     return struct.unpack(endian_character + format_char_sequence, data)
 
@@ -337,27 +325,14 @@ def read_model(path, ext=""):
 
 def get_cam_intrinsics(camera):
     """
-    Convert a COLMAP camera entry to:
-      - K: 3x3 pinhole intrinsic matrix (float64)
-      - dist: OpenCV-compatible distortion vector
+    Convert a COLMAP camera to:
+      - K: 3×3 pinhole intrinsic matrix
+      - dist: OpenCV-style distortion coefficients
       - undistort_kind: one of {"none", "opencv", "fisheye"}
 
-    Supported models (COLMAP → OpenCV mapping):
-      SIMPLE_PINHOLE:     [f, cx, cy]                     -> K(f,f,cx,cy), no distortion
-      PINHOLE:            [fx, fy, cx, cy]                -> K(fx,fy,cx,cy), no distortion
-      SIMPLE_RADIAL:      [f, cx, cy, k1]                 -> dist=[k1, 0, 0, 0]  (opencv)
-      RADIAL:             [f, cx, cy, k1, k2]             -> dist=[k1, k2, 0, 0, 0] (opencv, 5 coeffs)
-      OPENCV:             [fx, fy, cx, cy, k1, k2, p1, p2]-> dist=[k1, k2, p1, p2] (opencv, 4 coeffs)
-      FULL_OPENCV:        [fx, fy, cx, cy, k1,k2,p1,p2,k3,k4,k5,k6]
-                                                      -> dist=[k1,k2,p1,p2,k3,k4,k5,k6,0,0,0,0] (opencv, 12 coeffs)
-      OPENCV_FISHEYE:     [fx, fy, cx, cy, k1, k2, k3, k4]   -> dist=[k1,k2,k3,k4] (fisheye)
-      SIMPLE_RADIAL_FISHEYE:[f, cx, cy, k1]               -> dist=[k1,0,0,0] (fisheye)
-      RADIAL_FISHEYE:     [f, cx, cy, k1, k2]             -> dist=[k1,k2,0,0] (fisheye)
-
-    Notes:
-      • For opencv (non-fisheye) models we use cv2.undistort; for fisheye we use cv2.fisheye.undistortImage.
-      • For pure pinhole models, we set undistort_kind="none" and return zeros distortion.
-      • If you need "FOV" or "THIN_PRISM_FISHEYE", raise for now or approximate (not recommended).
+    Supports common COLMAP models (PINHOLE, SIMPLE_RADIAL, RADIAL, OPENCV,
+    FULL_OPENCV, OPENCV_FISHEYE and *_FISHEYE variants) and maps them to
+    standard OpenCV or fisheye distortion conventions.
     """
     model = camera.model.upper()
     p = camera.params.astype(np.float64)
@@ -427,187 +402,3 @@ def get_cam_intrinsics(camera):
             f"Unsupported camera model for undistortion: {camera.model}"
         )
     return K, dist, undistort_kind
-
-# * NeRFStudio
-def auto_orient_and_center_poses(
-    poses: Float[Tensor, "*num_poses 4 4"],
-    method: Literal["pca", "up", "vertical", "none"] = "up",
-    center_method: Literal["poses", "focus", "none"] = "poses",
-) -> Tuple[Float[Tensor, "*num_poses 3 4"], Float[Tensor, "3 4"]]:
-    """Orients and centers the poses.
-
-    We provide three methods for orientation:
-
-    - pca: Orient the poses so that the principal directions of the camera centers are aligned
-        with the axes, Z corresponding to the smallest principal component.
-        This method works well when all of the cameras are in the same plane, for example when
-        images are taken using a mobile robot.
-    - up: Orient the poses so that the average up vector is aligned with the z axis.
-        This method works well when images are not at arbitrary angles.
-    - vertical: Orient the poses so that the Z 3D direction projects close to the
-        y axis in images. This method works better if cameras are not all
-        looking in the same 3D direction, which may happen in camera arrays or in LLFF.
-
-    There are two centering methods:
-
-    - poses: The poses are centered around the origin.
-    - focus: The origin is set to the focus of attention of all cameras (the
-        closest point to cameras optical axes). Recommended for inward-looking
-        camera configurations.
-
-    Args:
-        poses: The poses to orient.
-        method: The method to use for orientation.
-        center_method: The method to use to center the poses.
-
-    Returns:
-        Tuple of the oriented poses and the transform matrix.
-    """
-
-    origins = poses[..., :3, 3]
-
-    mean_origin = torch.mean(origins, dim=0)
-    translation_diff = origins - mean_origin
-
-    if center_method == "poses":
-        translation = mean_origin
-    elif center_method == "focus":
-        translation = _focus_of_attention(poses, mean_origin)
-    elif center_method == "none":
-        translation = torch.zeros_like(mean_origin)
-    else:
-        raise ValueError(f"Unknown value for center_method: {center_method}")
-
-    if method == "pca":
-        _, eigvec = torch.linalg.eigh(translation_diff.T @ translation_diff)
-        eigvec = torch.flip(eigvec, dims=(-1,))
-
-        if torch.linalg.det(eigvec) < 0:
-            eigvec[:, 2] = -eigvec[:, 2]
-
-        transform = torch.cat([eigvec, eigvec @ -translation[..., None]], dim=-1)
-        oriented_poses = transform @ poses
-
-        if oriented_poses.mean(dim=0)[2, 1] < 0:
-            oriented_poses[1:3, :] = -1 * oriented_poses[1:3, :]
-            transform[1:3, :] = -1 * transform[1:3, :]
-    elif method in ("up", "vertical"):
-        up = torch.mean(poses[:, :3, 1], dim=0)
-        up = up / torch.linalg.norm(up)
-        if method == "vertical":
-            # If cameras are not all parallel (e.g. not in an LLFF configuration),
-            # we can find the 3D direction that most projects vertically in all
-            # cameras by minimizing ||Xu|| s.t. ||u||=1. This total least squares
-            # problem is solved by SVD.
-            x_axis_matrix = poses[:, :3, 0]
-            _, S, Vh = torch.linalg.svd(x_axis_matrix, full_matrices=False)
-            # Singular values are S_i=||Xv_i|| for each right singular vector v_i.
-            # ||S|| = sqrt(n) because lines of X are all unit vectors and the v_i
-            # are an orthonormal basis.
-            # ||Xv_i|| = sqrt(sum(dot(x_axis_j,v_i)^2)), thus S_i/sqrt(n) is the
-            # RMS of cosines between x axes and v_i. If the second smallest singular
-            # value corresponds to an angle error less than 10° (cos(80°)=0.17),
-            # this is probably a degenerate camera configuration (typical values
-            # are around 5° average error for the true vertical). In this case,
-            # rather than taking the vector corresponding to the smallest singular
-            # value, we project the "up" vector on the plane spanned by the two
-            # best singular vectors. We could also just fallback to the "up"
-            # solution.
-            if S[1] > 0.17 * math.sqrt(poses.shape[0]):
-                # regular non-degenerate configuration
-                up_vertical = Vh[2, :]
-                # It may be pointing up or down. Use "up" to disambiguate the sign.
-                up = up_vertical if torch.dot(up_vertical, up) > 0 else -up_vertical
-            else:
-                # Degenerate configuration: project "up" on the plane spanned by
-                # the last two right singular vectors (which are orthogonal to the
-                # first). v_0 is a unit vector, no need to divide by its norm when
-                # projecting.
-                up = up - Vh[0, :] * torch.dot(up, Vh[0, :])
-                # re-normalize
-                up = up / torch.linalg.norm(up)
-
-        rotation = _rotation_matrix_between(up, torch.Tensor([0, 0, 1]))
-        transform = torch.cat([rotation, rotation @ -translation[..., None]], dim=-1)
-        oriented_poses = transform @ poses
-    elif method == "none":
-        transform = torch.eye(4)
-        transform[:3, 3] = -translation
-        transform = transform[:3, :]
-        oriented_poses = transform @ poses
-    else:
-        raise ValueError(f"Unknown value for method: {method}")
-
-    return oriented_poses, transform
-
-
-def _focus_of_attention(poses: Float[Tensor, "*num_poses 4 4"], initial_focus: Float[Tensor, "3"]) -> Float[Tensor, "3"]:
-    """Compute the focus of attention of a set of cameras. Only cameras
-    that have the focus of attention in front of them are considered.
-
-     Args:
-        poses: The poses to orient.
-        initial_focus: The 3D point views to decide which cameras are initially activated.
-
-    Returns:
-        The 3D position of the focus of attention.
-    """
-    # References to the same method in third-party code:
-    # https://github.com/google-research/multinerf/blob/1c8b1c552133cdb2de1c1f3c871b2813f6662265/internal/camera_utils.py#L145
-    # https://github.com/bmild/nerf/blob/18b8aebda6700ed659cb27a0c348b737a5f6ab60/load_llff.py#L197
-    active_directions = -poses[:, :3, 2:3]
-    active_origins = poses[:, :3, 3:4]
-    # initial value for testing if the focus_pt is in front or behind
-    focus_pt = initial_focus
-    # Prune cameras which have the current have the focus_pt behind them.
-    active = torch.sum(active_directions.squeeze(-1) * (focus_pt - active_origins.squeeze(-1)), dim=-1) > 0
-    done = False
-    # We need at least two active cameras, else fallback on the previous solution.
-    # This may be the "poses" solution if no cameras are active on first iteration, e.g.
-    # they are in an outward-looking configuration.
-    while torch.sum(active.int()) > 1 and not done:
-        active_directions = active_directions[active]
-        active_origins = active_origins[active]
-        # https://en.wikipedia.org/wiki/Line–line_intersection#In_more_than_two_dimensions
-        m = torch.eye(3) - active_directions * torch.transpose(active_directions, -2, -1)
-        mt_m = torch.transpose(m, -2, -1) @ m
-        focus_pt = torch.linalg.inv(mt_m.mean(0)) @ (mt_m @ active_origins).mean(0)[:, 0]
-        active = torch.sum(active_directions.squeeze(-1) * (focus_pt - active_origins.squeeze(-1)), dim=-1) > 0
-        if active.all():
-            # the set of active cameras did not change, so we're done.
-            done = True
-    return focus_pt
-
-
-
-def _rotation_matrix_between(a: Float[Tensor, "3"], b: Float[Tensor, "3"]) -> Float[Tensor, "3 3"]:
-    """Compute the rotation matrix that rotates vector a to vector b.
-
-    Args:
-        a: The vector to rotate.
-        b: The vector to rotate to.
-    Returns:
-        The rotation matrix.
-    """
-    a = a / torch.linalg.norm(a)
-    b = b / torch.linalg.norm(b)
-    v = torch.linalg.cross(a, b)  # Axis of rotation.
-
-    # Handle cases where `a` and `b` are parallel.
-    eps = 1e-6
-    if torch.sum(torch.abs(v)) < eps:
-        x = torch.tensor([1.0, 0, 0]) if abs(a[0]) < eps else torch.tensor([0, 1.0, 0])
-        v = torch.linalg.cross(a, x)
-
-    v = v / torch.linalg.norm(v)
-    skew_sym_mat = torch.Tensor(
-        [
-            [0, -v[2], v[1]],
-            [v[2], 0, -v[0]],
-            [-v[1], v[0], 0],
-        ]
-    )
-    theta = torch.acos(torch.clip(torch.dot(a, b), -1, 1))
-
-    # Rodrigues rotation formula. https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
-    return torch.eye(3) + torch.sin(theta) * skew_sym_mat + (1 - torch.cos(theta)) * (skew_sym_mat @ skew_sym_mat)

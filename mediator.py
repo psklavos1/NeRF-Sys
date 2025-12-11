@@ -31,9 +31,7 @@ def setup_logging():
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-    fmt = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     file_handler = logging.FileHandler(str(log_path), mode="w")
     file_handler.setFormatter(fmt)
@@ -95,8 +93,6 @@ def launch_process(script, config_path=None, cwd=None, devices: str | None = Non
         env["PYTHONPATH"] = os.path.abspath(cwd)
 
     # Device selection:
-    # - devices is None or "all" -> do not touch CUDA_VISIBLE_DEVICES (all GPUs visible)
-    # - otherwise set CUDA_VISIBLE_DEVICES to the provided string, e.g. "0" or "0,1"
     if devices is not None and devices.lower() != "all":
         env["CUDA_VISIBLE_DEVICES"] = devices
 
@@ -162,9 +158,7 @@ def run_nerf_thread(cfg: dict, job_id: str, devices: str | None) -> int:
         cfg["fname"] = f"{job_id}/{run_tag}"  # => logs/{job_id}/{tag}/
 
         tmp_path = write_temp_config(cfg)
-        logger.info(
-            f"[job_id={job_id}] Launching NeRF job with op='{op}' "
-        )
+        logger.info(f"[job_id={job_id}] Launching NeRF job with op='{op}' ")
 
         process = launch_process(
             script=NERF_PROC,
@@ -179,9 +173,7 @@ def run_nerf_thread(cfg: dict, job_id: str, devices: str | None) -> int:
                 f"[job_id={job_id}] NeRF job FAILED (op='{op}', code={process.returncode})"
             )
         else:
-            logger.info(
-                f"[job_id={job_id}] NeRF job COMPLETED (op='{op}', code=0)"
-            )
+            logger.info(f"[job_id={job_id}] NeRF job COMPLETED (op='{op}', code=0)")
 
         return process.returncode
 

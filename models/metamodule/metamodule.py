@@ -1,30 +1,24 @@
 from typing import Dict, Optional
-import torch
-import torch.nn as nn
+from collections import OrderedDict
 import re
 import warnings
-from collections import OrderedDict
 from einops import rearrange
+
+import torch
+import torch.nn as nn
 
 from models.trunc_exp import trunc_exp
 
 
 class MetaModule(nn.Module):
-    """
-    Base class for meta-learnable modules.
-
-    Enables models to receive an optional `params` dictionary of parameters,
-    allowing parameter substitution during the forward pass (e.g., for MAML, hypernetworks).
-    """
+    """Base class for modules that support optional fast weights injection via a params dict."""
 
     def __init__(self):
         super(MetaModule, self).__init__()
         self._children_modules_parameters_cache = dict()
 
-    def meta_named_parameters(self, prefix="", recurse=True):
-        """
-        Yields all meta-learnable parameters across nested MetaModules.
-        """
+    def meta_named_parameters(self, prefix: str = "", recurse: bool = True):
+        """Iterate over meta-learnable parameters in this module and nested MetaModules."""
         gen = self._named_members(
             lambda module: (
                 module._parameters.items() if isinstance(module, MetaModule) else []
@@ -35,23 +29,18 @@ class MetaModule(nn.Module):
         for elem in gen:
             yield elem
 
-    def meta_parameters(self, recurse=True):
-        """
-        Returns an iterator over all meta-learnable parameters.
-        """
-        for name, param in self.meta_named_parameters(recurse=recurse):
+    def meta_parameters(self, recurse: bool = True):
+        """Yield meta-learnable parameters only."""
+        for _, param in self.meta_named_parameters(recurse=recurse):
             yield param
 
-    def get_subdict(self, params, key=None):
+    def get_subdict(
+        self, params: Optional[Dict[str, torch.Tensor]], key: Optional[str] = None
+    ) -> Optional[OrderedDict]:
         """
-        Retrieves the subset of `params` relevant to the submodule identified by `key`.
+        Return sub-dict of params relevant to child module `key`.
 
-        Parameters:
-        - params: Full parameter dictionary.
-        - key: Submodule name (e.g., 'layer1').
-
-        Returns:
-        - An OrderedDict containing only the parameters associated with the submodule.
+        Expects params with keys like "layer.weight", "layer.bias", etc.
         """
         if params is None:
             return None
@@ -71,7 +60,7 @@ class MetaModule(nn.Module):
         names = self._children_modules_parameters_cache[(key, all_names)]
         if not names:
             warnings.warn(
-                f"Module `{self.__class__.__name__}` has no parameter corresponding to submodule `{key}` in `params`.\n"
+                f"Module `{self.__class__.__name__}` has no parameter for submodule `{key}` in `params`.\n"
                 f"Using default parameters. Provided keys: [{', '.join(all_names)}]",
                 stacklevel=2,
             )
@@ -81,13 +70,9 @@ class MetaModule(nn.Module):
 
 
 class MetaSequential(nn.Sequential, MetaModule):
-    """
-    A sequential container for meta-learnable layers.
+    """Sequential container that propagates optional meta-params to MetaModules."""
 
-    Works like `nn.Sequential`, but supports `params` injection per module.
-    """
-
-    def forward(self, input, params=None):
+    def forward(self, input, params: Optional[Dict[str, torch.Tensor]] = None):
         for name, module in self._modules.items():
             if isinstance(module, MetaModule):
                 input = module(input, params=self.get_subdict(params, name))
@@ -102,68 +87,59 @@ class MetaSequential(nn.Sequential, MetaModule):
 
 class MetaBatchLinear(nn.Linear, MetaModule):
     """
-    Meta-learnable batched linear layer.
+    Batched meta-learnable Linear layer.
 
-    This layer allows parameter substitution where weights and biases are
-    defined per task (i.e., batched). It supports outer-loop optimization
-    where each task may receive a different weight matrix.
-
-    Parameters:
-    - inputs: (batch_size, num_points, in_features)
-    - weight: (batch_size, out_features, in_features)
-    - bias:   (batch_size, out_features)
+    Expects:
+      inputs: (B, N, in_features)
+      weight: (B, out_features, in_features)
+      bias:   (B, out_features)
     """
 
-    def forward(self, inputs, params=None):
+    def forward(
+        self, inputs: torch.Tensor, params: Optional[Dict[str, torch.Tensor]] = None
+    ):
         if params is None:
-            # Default: use internal parameters, but expand them to match batch size
             params = OrderedDict(self.named_parameters())
             for name, param in params.items():
                 params[name] = param[None, ...].repeat(
                     (inputs.size(0),) + (1,) * len(param.shape)
                 )
 
-        weight = params["weight"]  # shape: (B, out, in)
-        bias = params.get("bias", None)  # shape: (B, out)
+        weight = params["weight"]
+        bias = params.get("bias", None)
 
-        # --- ensure batched shapes ---
         if weight.dim() == 2:
-            weight = weight.unsqueeze(0)  # (out,in) -> (1,out,in)
+            weight = weight.unsqueeze(0)
         if bias is not None:
             if bias.dim() == 1:
-                bias = bias.unsqueeze(0)  # (out,)   -> (1,out)
-            elif bias.dim() == 3 and bias.shape[1] == 1:  # (B,1,out) -> squeeze middle
+                bias = bias.unsqueeze(0)
+            elif bias.dim() == 3 and bias.shape[1] == 1:
                 bias = bias.squeeze(1)
 
-        # Reorder inputs to (B, in, N) for batched matmul
         inputs = rearrange(inputs, "b n d -> b d n")
-        output = torch.bmm(weight, inputs)  # (B, out, N)
+        output = torch.bmm(weight, inputs)
         output = rearrange(output, "b d n -> b n d")
 
         if bias is not None:
-            output += bias.unsqueeze(1)  # (B, 1, out) for broadcasting over N
+            output += bias.unsqueeze(1)
 
         return output
 
 
 class MetaLinear(nn.Linear, MetaModule):
     """
-    Minimal meta-learnable Linear (one task at a time).
+    Meta-learnable Linear layer for single-task fast weights.
 
-    Forward:
-      inputs: (num_points, in_features)
-      params (optional): {
-         "weight": (out_features, in_features),
-         "bias":   (out_features,)  # optional
-      }
-
-    If params is None -> uses the module's own parameters.
+    inputs: (N, in_features)
+    params (optional): {
+        "weight": (out_features, in_features),
+        "bias":   (out_features,)
+    }
     """
 
     def forward(
         self, inputs: torch.Tensor, params: Optional[Dict[str, torch.Tensor]] = None
     ) -> torch.Tensor:
-        # choose params
         if params is None:
             weight = self.weight
             bias = self.bias
@@ -174,19 +150,21 @@ class MetaLinear(nn.Linear, MetaModule):
         if inputs.dtype != weight.dtype:
             inputs = inputs.to(weight.dtype)
 
-        # (..., in) x (in, out)^T -> (..., out)
         out = inputs.matmul(weight.t())
         if bias is not None:
             out = out + bias
         return out
 
 
-# -------------------------------------------------
-# MetaLinear + Activation wrapper (fast-weights ready)
-# -------------------------------------------------
 class MetaLayerBlock(MetaModule):
+    """Linear + activation block using MetaLinear or MetaBatchLinear."""
+
     def __init__(
-        self, dim_in: int, dim_out: int, activation: Optional[str] = None, batched=False
+        self,
+        dim_in: int,
+        dim_out: int,
+        activation: Optional[str] = None,
+        batched: bool = False,
     ):
         super().__init__()
         self.linear = (
@@ -207,6 +185,8 @@ class MetaLayerBlock(MetaModule):
         else:
             raise ValueError(f"Unsupported activation: {activation}")
 
-    def forward(self, x, params: Optional[OrderedDict] = None):
+    def forward(
+        self, x: torch.Tensor, params: Optional[OrderedDict] = None
+    ) -> torch.Tensor:
         x = self.linear(x, params=self.get_subdict(params, "linear"))
         return self.act(x)

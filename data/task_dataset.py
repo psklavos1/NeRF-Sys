@@ -1,15 +1,12 @@
-# task_dataset.py (simplified, fast, random-per-image sampling; strict S/Q disjoint)
 import math
 import warnings
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Tuple
+
 import torch
 from torch.utils.data import IterableDataset
 
 
-# -------------------------
-# Task container
-# -------------------------
 @dataclass
 class Task:
     """One episode: support/query sampled from a single spatial cell."""
@@ -30,29 +27,22 @@ class Task:
 # -------------------------
 class TaskDataset(IterableDataset):
     """
-    Episodic dataset where a Task = ONE voxel cell in a region.
+    Episodic NeRF dataset that samples support/query rays from a single voxel cell.
 
-    Goals met here:
-    - Random task/cell selection across the whole region (uniform unless sequential requested).
-    - **Simple & fast** per-cell sampling: choose random images, then random rays per image.
-    - Support/Query are **always ray-disjoint**; they are **image-disjoint** whenever possible
-      (fallback to borrowing images only when strictly necessary).
-    - Avoids round-robin / pointer complexity. All picks use RNG with a user/worker-seeded
-      torch.Generator for reproducibility.
-    - Optional per-image cap to prevent one image from dominating.
+    Each episode selects a cell, then draws ray-disjoint (and when possible
+    image-disjoint) support and query sets using a reproducible RNG.
     """
 
-    # ---------- init ----------
     def __init__(
         self,
-        ram_ds,  # requires ._rays, ._rgbs, ._img_indices (optionally ._uv)
+        ram_ds,
         cell_id: int,
         S_target: int = 4000,
         Q_target: int = 2000,
         min_rays_cell: int = 6000,
         image_cap: Optional[
             float
-        ] = None,  # e.g., 0.4 (<=40% per split comes from a single image)
+        ] = None,  # e.g. 0.4 = max 40% per split from one image
         max_images_support: Optional[int] = 8,
         max_images_query: Optional[int] = 4,
         min_images_support: int = 2,
@@ -62,17 +52,16 @@ class TaskDataset(IterableDataset):
         ] = None,
         cells: Tuple[int, int, int] = (1, 6, 6),  # (nx, ny, nz)
         cell_pick: str = "uniform",  # "uniform" or "sequential"
-        assignment_checkpoint: float = 0.7,  # α in [0,1]; α=0 ≈ entry-first
-        routing_policy: str = "alpha",  # "alpha" | "dda" (dda = max-overlap traversal)
-        # ---- controls ----
-        image_disjoint_splits: bool = True,  # prefer different images across S/Q (fallback to ray-only)
-        overlap_bias_exponent: float = 0.6,  # 0=no bias, 1=linear bias by overlap length
-        debug: bool = False,  # add uv & image lists, run overlap asserts
+        assignment_checkpoint: float = 0.7,
+        routing_policy: str = "alpha",  # "alpha" or "dda"
+        image_disjoint_splits: bool = True,
+        overlap_bias_exponent: float = 0.6,
+        debug: bool = False,
         seed: int = 0,
     ):
         super().__init__()
 
-        # ---- validate RamRaysDataset internals (RAM tensors) ----
+        # Validate RamRaysDataset internals (must be fully in RAM)
         for attr in ("_rays", "_rgbs", "_img_indices"):
             if not hasattr(ram_ds, attr):
                 raise ValueError(
@@ -82,11 +71,13 @@ class TaskDataset(IterableDataset):
         self.rays = ram_ds._rays  # [N, 8]: [o(3), d(3), near, far]
         self.rgbs = ram_ds._rgbs  # [N, 3]
         self.imgix = ram_ds._img_indices  # [N]
-        self.uv = None  # optional [N,2] pixel coords
+        self.uv = None  # optional [N, 2] pixel coords
+
         self.max_images_support = max_images_support
         self.max_images_query = max_images_query
         self.min_images_support = int(min_images_support)
         self.min_images_query = int(min_images_query)
+
         self.seed = int(seed)
         self.rng = torch.Generator(device=torch.device("cpu"))
         self.rng.manual_seed(self.seed)
@@ -101,10 +92,7 @@ class TaskDataset(IterableDataset):
         self.cell_pick = cell_pick
         self.assignment_checkpoint = float(max(0.0, min(1.0, assignment_checkpoint)))
         self.routing_policy = str(routing_policy).lower()
-        assert self.routing_policy in (
-            "alpha",
-            "dda",
-        ), "routing_policy must be 'alpha' or 'dda'"
+        assert self.routing_policy in ("alpha", "dda")
         self.image_disjoint_splits = bool(image_disjoint_splits)
         self.overlap_bias_exponent = float(overlap_bias_exponent)
         self.debug = bool(debug)
@@ -112,25 +100,21 @@ class TaskDataset(IterableDataset):
         self.N_total = int(self.rays.shape[0])
         self.device = self.rays.device
 
-        # ---- establish region AABB ----
+        # Region AABB and per-cell bounds
         self.aabb = self._init_region_aabb(self.rays, region_bounds)
-
-        # ---- prebuild grid bounds ----
         self.cell_bounds, self.cell_sizes = self._build_cell_bounds(
             self.aabb, self.cells, self.device
-        )  # [C,2,3], [C,3]
+        )  # [C, 2, 3], [C, 3]
 
-        # ---- route rays to cells (robust) & filter weak overlaps ----
+        # Route rays to cells and build caches
         cell_bins = self._route_and_bin(
             self.rays, self.aabb, self.cells, self.assignment_checkpoint
         )
-
-        # ---- build cached per-cell buckets (packed) ----
         self._build_cell_cache(cell_bins)
         del cell_bins
 
-        # ---- eligible cells ----
-        self._cursor = 0  # for sequential pick
+        # Cells with enough rays for an episode
+        self._cursor = 0
         self.eligible_cells = [
             i
             for i, total in enumerate(self._cell_total_counts)

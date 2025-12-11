@@ -1,18 +1,12 @@
-#!/usr/bin/env python3
 """
-DRB-native video generator (RUB columns in c2w), compatible with your pipeline.
+DRB-native NeRF video generator with RUB c2w poses.
 
-Conventions (matches your dataset prep):
+Assumes:
 - World translations are in DRB.
-- c2w rotation stores RUB columns ([right, up, back]) expressed in DRB coords.
-- get_ray_directions already returns RUB camera rays with z_cam = -1.
-
-Provides:
-  - poses_turntable_drb(...) : stable orbit pose generator
-  - render_video(...)        : main rendering entrypoint
+- c2w stores RUB columns ([right, up, back]) in DRB coords.
+- get_ray_directions returns RUB camera rays with z_cam = -1.
 """
 
-from __future__ import annotations
 import math
 from contextlib import nullcontext
 from typing import Optional
@@ -26,19 +20,16 @@ from nerfs.ray_rendering import render_rays
 from nerfs.scene_box import SceneBox
 
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
 def _rub_pose_from_pos(
     center: torch.Tensor, cam: torch.Tensor, up_world: torch.Tensor
 ) -> torch.Tensor:
-    """Build c2w with RUB columns from a camera position in DRB world."""
+    """Build c2w with RUB columns given camera and scene center in DRB."""
     fwd = center - cam
     fwd = fwd / fwd.norm().clamp_min_(1e-12)
     right = torch.linalg.cross(fwd, up_world)
     right = right / right.norm().clamp_min_(1e-12)
     up = torch.linalg.cross(right, fwd)
-    R = torch.stack([right, up, -fwd], dim=1)  # RUB columns
+    R = torch.stack([right, up, -fwd], dim=1)
     c2w = torch.eye(4, device=cam.device, dtype=cam.dtype)
     c2w[:3, :3] = R
     c2w[:3, 3] = cam
@@ -48,17 +39,14 @@ def _rub_pose_from_pos(
 def _rub_pose_look_same_D(
     center: torch.Tensor, cam: torch.Tensor, up_world: torch.Tensor
 ) -> torch.Tensor:
-    """
-    Make c2w (RUB columns) that looks at the scene center but with the
-    target's D (height) set to the camera's D → no pitching down/up.
-    """
-    look = torch.stack([cam[0], center[1], center[2]])  # same D as camera
+    """Build c2w that looks at center projected to camera height (D axis)."""
+    look = torch.stack([cam[0], center[1], center[2]])
     fwd = look - cam
     fwd = fwd / fwd.norm().clamp_min_(1e-12)
     right = torch.cross(fwd, up_world)
     right = right / right.norm().clamp_min_(1e-12)
     up = torch.cross(right, fwd)
-    R = torch.stack([right, up, -fwd], dim=1)  # RUB columns
+    R = torch.stack([right, up, -fwd], dim=1)
     c2w = torch.eye(4, device=cam.device, dtype=cam.dtype)
     c2w[:3, :3] = R
     c2w[:3, 3] = cam
@@ -68,20 +56,19 @@ def _rub_pose_look_same_D(
 def _rub_pose_from_fwd(
     cam: torch.Tensor, fwd: torch.Tensor, up_world: torch.Tensor
 ) -> torch.Tensor:
+    """Build c2w with given forward direction in DRB."""
     fwd = fwd / fwd.norm().clamp_min_(1e-12)
     right = torch.cross(fwd, up_world)
     right = right / right.norm().clamp_min_(1e-12)
     up = torch.cross(right, fwd)
-    R = torch.stack([right, up, -fwd], dim=1)  # RUB columns
+    R = torch.stack([right, up, -fwd], dim=1)
     c2w = torch.eye(4, device=cam.device, dtype=cam.dtype)
     c2w[:3, :3] = R
     c2w[:3, 3] = cam
     return c2w
 
 
-# -----------------------------------------------------------------------------
-# Pose generator
-# -----------------------------------------------------------------------------
+# Pose generators --------------------------------------------------------------
 def poses_turntable_drb(
     *,
     center_drb: torch.Tensor,
@@ -92,8 +79,9 @@ def poses_turntable_drb(
     tilt_deg: float = 0.0,
 ) -> torch.Tensor:
     """
-    Generate turntable orbit poses around a scene center in DRB world.
-    Output: (T,4,4) c2w matrices (RUB columns).
+    Generate a simple turntable orbit around center in DRB.
+
+    Returns (T, 4, 4) c2w matrices with RUB columns.
     """
     device = torch.device(device)
     dtype = torch.float32
@@ -110,7 +98,6 @@ def poses_turntable_drb(
     s_tilt, c_tilt = math.sin(math.radians(tilt_deg)), math.cos(math.radians(tilt_deg))
 
     for th in thetas:
-        # Camera position (DRB coordinates)
         d = -radius * s_phi
         r = radius * c_phi * torch.cos(th)
         b = radius * c_phi * torch.sin(th)
@@ -154,10 +141,7 @@ def gen_path_east_west(
     margin: float = 0.90,
     device="cuda",
 ) -> torch.Tensor:
-    """
-    Sweep along R (west→east) at constant D (height), staying inside the box.
-    No “suck into center”. Looks at center projected to same D.
-    """
+    """Sweep along R (west→east) at constant height, looking at center."""
     dev = torch.device(device)
     dtype = torch.float32
     up_world = torch.tensor([-1.0, 0.0, 0.0], device=dev, dtype=dtype)
@@ -167,19 +151,16 @@ def gen_path_east_west(
         0.5 * extent[2].item(),
     )
 
-    D = torch.tensor(height_frac * halfD, device=dev, dtype=dtype)  # constant height
-    R0, R1 = -margin * halfR, +margin * halfR  # inside rails
-    Boff = 0.15 * halfB  # gentle lateral offset
+    D = torch.tensor(height_frac * halfD, device=dev, dtype=dtype)
+    R0, R1 = -margin * halfR, +margin * halfR
+    Boff = 0.15 * halfB
     ts = torch.linspace(0, 1, n_poses, device=dev)
-    # cosine ease in/out but **no** center pull
     u = 0.5 * (1 - torch.cos(torch.pi * ts))
 
     poses = []
     for t, w in zip(ts, u):
         R = (1 - w) * R0 + w * R1
-        B = Boff * torch.sin(
-            2 * torch.pi * t
-        )  # mild snake but never toward center in D
+        B = Boff * torch.sin(2 * torch.pi * t)
         cam = center + torch.tensor([D, R, B], device=dev, dtype=dtype)
         poses.append(_rub_pose_look_same_D(center, cam, up_world))
     return torch.stack(poses, 0)
@@ -194,10 +175,7 @@ def gen_path_north_south(
     margin: float = 0.90,
     device="cuda",
 ) -> torch.Tensor:
-    """
-    Sweep along B (north→south) at constant D, staying inside.
-    No height drop; no center pitch.
-    """
+    """Sweep along B (north→south) at constant height, looking at center."""
     dev = torch.device(device)
     dtype = torch.float32
     up_world = torch.tensor([-1.0, 0.0, 0.0], device=dev, dtype=dtype)
@@ -235,10 +213,9 @@ def gen_path_spiral_inside(
     device="cuda",
 ) -> torch.Tensor:
     """
-    Spiral that stays INSIDE the AABB:
-      - radius confined to (radial_frac * min_extent/2)
-      - gentle height (D) variation about height_center_frac of half D-extent
-      - 'turns' helix turns in the R–B plane
+    Spiral camera path entirely inside the scene AABB.
+
+    Radius is limited to radial_frac * (min_extent/2) with mild height variation.
     """
     dev = torch.device(device)
     dtype = torch.float32
@@ -250,25 +227,22 @@ def gen_path_spiral_inside(
     )
     min_half = 0.5 * float(extent.min().item())
 
-    # in-plane radius entirely inside
-    r_base = radial_frac * min_half  # e.g., 0.6 * (min_extent/2)
+    r_base = radial_frac * min_half
 
-    # mild radial modulation to look "alive", still inside
     def radius(theta):
         return r_base * (0.85 + 0.15 * torch.cos(theta * 0.5))
 
-    # height profile (D axis): “start lower within the thing”, gentle variation
-    d_center = height_center_frac * halfD  # e.g., -0.15 * halfD (slightly above middle)
-    d_amp = height_amp_frac * halfD  # small +/- wobble
+    d_center = height_center_frac * halfD
+    d_amp = height_amp_frac * halfD
 
     thetas = torch.linspace(0, 2 * math.pi * turns, n_poses, device=dev)
     poses = []
     for th in thetas:
         rad = radius(th)
-        r = rad * torch.cos(th)  # R (east)
-        b = rad * torch.sin(th)  # B (south)
-        d = d_center + d_amp * torch.sin(0.5 * th)  # gentle vertical
-        # clamp inside (extra safety)
+        r = rad * torch.cos(th)
+        b = rad * torch.sin(th)
+        d = d_center + d_amp * torch.sin(0.5 * th)
+
         r = torch.clamp(r, -halfR * 0.95, +halfR * 0.95)
         b = torch.clamp(b, -halfB * 0.95, +halfB * 0.95)
         d = torch.clamp(d, -halfD * 0.90, +halfD * 0.90)
@@ -291,6 +265,11 @@ def gen_path_full_coverage(
     height_end_frac: float = +0.18,
     device="cuda",
 ) -> torch.Tensor:
+    """
+    Grid-like path that sweeps a DRB-aligned grid over the scene with smooth motion.
+
+    Returns (T, 4, 4) c2w matrices approximating n_poses frames.
+    """
     dev = torch.device(device)
     dtype = torch.float32
     up_world = torch.tensor([-1.0, 0.0, 0.0], device=dev, dtype=dtype)
@@ -300,21 +279,17 @@ def gen_path_full_coverage(
         0.5 * extent[0].item(),
     )
 
-    # make a grid fully inside (shrink a little for safety)
     Rvals = torch.linspace(-0.85 * halfR, +0.85 * halfR, cols, device=dev)
     Bvals = torch.linspace(-0.85 * halfB, +0.85 * halfB, rows, device=dev)
 
-    # serpentine order across rows
     waypoints = []
     for i, b in enumerate(Bvals):
         Rs = Rvals if (i % 2 == 0) else torch.flip(Rvals, dims=[0])
-        for r in Rs:
-            waypoints.append((r.item(), b.item()))
+        waypoints.extend((r.item(), b.item()) for r in Rs)
     M = len(waypoints)
 
-    # target frames per leg to approach n_poses
-    legs = M - 1
-    f_per_leg = max(2, int(math.ceil(n_poses / max(1, legs))))
+    legs = max(1, M - 1)
+    f_per_leg = max(2, int(math.ceil(n_poses / legs)))
     total = legs * f_per_leg
     t_heights = torch.linspace(0.0, 1.0, total, device=dev)
     d_start = height_start_frac * halfD
@@ -322,7 +297,6 @@ def gen_path_full_coverage(
 
     poses = []
 
-    # cosine ease for smoothness between grid points
     def ease(u):
         return 0.5 * (1 - torch.cos(torch.tensor(math.pi, device=dev) * u))
 
@@ -335,7 +309,6 @@ def gen_path_full_coverage(
             w = ease(u)
             r = (1 - w) * r0 + w * r1
             b = (1 - w) * b0 + w * b1
-            # slow height ramp across the whole tour
             tH = t_heights[idx]
             d = (1 - tH) * d_start + tH * d_end
             idx += 1
@@ -343,7 +316,6 @@ def gen_path_full_coverage(
             poses.append(_rub_pose_from_pos(center, cam, up_world))
 
     poses = torch.stack(poses, 0)
-    # trim/pad to exactly n_poses
     if poses.shape[0] > n_poses:
         poses = poses[:n_poses]
     elif poses.shape[0] < n_poses:
@@ -353,37 +325,32 @@ def gen_path_full_coverage(
     return poses
 
 
-# -----------------------------------------------------------------------------
+# Fog suppression --------------------------------------------------------------
 def suppress_fog_inplace(
-    rgb: torch.Tensor,  # (m,3) per-ray RGB  [mutated in-place]
-    weights: torch.Tensor,  # (m,S) per-sample weights
-    acc: torch.Tensor,  # (m,1) accumulated opacity
+    rgb: torch.Tensor,
+    weights: torch.Tensor,
+    acc: torch.Tensor,
     *,
-    bg_val: float,  # 0.0 for black, 1.0 for white
-    acc_thr: float = 0.05,  # primary opacity cut (try 0.03–0.08)
-    wmax_thr: float = 0.08,  # cut when even max sample weight is tiny
-    entropy_thr: float = 1.5,  # cut when weight distribution is too spread
+    bg_val: float,
+    acc_thr: float = 0.05,
+    wmax_thr: float = 0.08,
+    entropy_thr: float = 1.5,
 ) -> dict:
     """
-    Two-stage fog suppression:
-      1) Zero pixels with very low accumulated opacity.
-      2) If still hazy: use weight shape (low max weight or high entropy).
-    Returns quick stats dict for logging.
+    Suppress low-opacity / hazy pixels in-place based on opacity and weight shape.
+
+    Returns a small stats dict (fraction of low-opacity and fogged pixels).
     """
-    acc1 = acc.squeeze(-1)  # (m,)
-    # Stage 1: opacity gate
-    low = acc1 < acc_thr  # (m,)
+    acc1 = acc.squeeze(-1)
+    low = acc1 < acc_thr
     if low.any():
         rgb[low] = bg_val
 
-    # Stage 2: shape-of-weights gate
-    # normalize weights only where sum>0
     wsum = weights.sum(dim=1, keepdim=True).clamp_min(1e-12)
     p = weights / wsum
-    entropy = -(p * p.clamp_min(1e-12).log()).sum(dim=1)  # (m,)
-    wmax = weights.max(dim=1).values  # (m,)
+    entropy = -(p * p.clamp_min(1e-12).log()).sum(dim=1)
+    wmax = weights.max(dim=1).values
 
-    # Slightly laxer acc threshold here; keeps solid surfaces
     fog = (acc1 < max(acc_thr * 1.3, 0.10)) & (
         (wmax < wmax_thr) | (entropy > entropy_thr)
     )
@@ -396,6 +363,7 @@ def suppress_fog_inplace(
     }
 
 
+# Main entrypoint --------------------------------------------------------------
 @torch.inference_mode()
 def render_video(
     model: torch.nn.Module,
@@ -408,15 +376,15 @@ def render_video(
     cx: float,
     cy: float,
     # scene / marching
-    scene_box: Optional["SceneBox"] = None,
+    scene_box: Optional[SceneBox] = None,
     near: Optional[float] = None,
     far: Optional[float] = None,
     # path selection
-    camera_path: str = "turntable",  # "turntable" | "north_south" | "east_west" | "spiral_in"
+    camera_path: str = "turntable",
     n_poses: int = 120,
     phi_deg: float = 20.0,
     tilt_deg: float = 0.0,
-    radius: Optional[float] = None,  # used by turntable only
+    radius: Optional[float] = None,
     center_drb: Optional[torch.Tensor] = None,
     # render
     ray_samples: int = 96,
@@ -427,21 +395,25 @@ def render_video(
     device: str | torch.device = "cuda",
     center_pixels: bool = True,
 ) -> str:
+    """
+    Render a NeRF video along a DRB camera path.
+
+    Supports camera_path in {"turntable", "north_south", "east_west",
+    "spiral_in", "full_coverage"} and writes an MP4 to out_path.
+    """
     dev = torch.device(device)
     dtype = torch.float32
     model = model.to(dev).eval()
+    if hasattr(model, "use_bg_nerf"):
+        model.use_bg_nerf = False
 
-    model.use_bg_nerf = False
-
-    def bg_color_val(bg_color_default):
+    def bg_color_val(bg_color_default: str) -> float:
         return 0.0 if bg_color_default == "black" else 1.0
 
-    # directions
     dirs_hw = get_ray_directions(
         H=H, W=W, fx=fx, fy=fy, cx=cx, cy=cy, center_pixels=center_pixels, device=dev
     )
 
-    # center/extent
     if scene_box is not None:
         aabb = scene_box.aabb.to(device=dev, dtype=dtype)
         center = 0.5 * (aabb[0] + aabb[1]) if center_drb is None else center_drb.to(dev)
@@ -452,11 +424,8 @@ def render_video(
             if center_drb is None
             else center_drb.to(dev)
         )
-        extent = torch.tensor(
-            [8.0, 8.0, 8.0], device=dev, dtype=dtype
-        )  # fallback scale
+        extent = torch.tensor([8.0, 8.0, 8.0], device=dev, dtype=dtype)
 
-    # choose path
     if camera_path == "turntable":
         if radius is None:
             radius = (0.5 * float(extent.norm().item())) * 1.5
@@ -479,10 +448,9 @@ def render_video(
     else:
         raise ValueError(f"Unknown camera_path: {camera_path}")
 
-    camera_drop = 0.15 * extent[0]  # try 0.1–0.2× the scene height
+    camera_drop = 0.15 * extent[0]
     poses[:, 0, 3] += camera_drop
 
-    # near bias
     if scene_box is not None:
         near_bias = 0.15 * (0.5 * float(extent.norm().item()))
     else:
@@ -497,6 +465,8 @@ def render_video(
         else nullcontext()
     )
 
+    fog_params = {"acc_thr": 0.05, "wmax_thr": 0.08, "entropy_thr": 1.4}
+
     for c2w in tqdm(
         poses, total=poses.shape[0], desc=f"[render:{camera_path}]", ncols=90
     ):
@@ -508,7 +478,7 @@ def render_video(
 
         t_near, t_far = rays[:, 6], rays[:, 7]
         t_near.clamp_(min=0.0)
-        t_near.add_((near_bias)).clamp_max_(t_far - 1e-4)
+        t_near.add_(near_bias).clamp_max_(t_far - 1e-4)
 
         valid = rays[:, 7] > rays[:, 6]
         idx = torch.nonzero(valid, as_tuple=False).squeeze(1)
@@ -517,11 +487,6 @@ def render_video(
             (N, 3), bg_color_val(bg_color_default), device=dev, dtype=torch.float32
         )
 
-        fp = {
-            "acc_thr": 0.05,
-            "wmax_thr": 0.08,
-            "entropy_thr": 1.4,
-        }  # stricter up,low,low
         with amp_ctx:
             for s in range(0, idx.numel(), chunk):
                 sel = idx[s : s + chunk]
@@ -538,16 +503,15 @@ def render_video(
                     chunk=chunk,
                 )
 
-                stats = suppress_fog_inplace(
+                suppress_fog_inplace(
                     rgb,
                     weights,
                     acc,
                     bg_val=bg_color_val(bg_color_default),
-                    acc_thr=fp["acc_thr"],
-                    wmax_thr=fp["wmax_thr"],
-                    entropy_thr=fp["entropy_thr"],
+                    acc_thr=fog_params["acc_thr"],
+                    wmax_thr=fog_params["wmax_thr"],
+                    entropy_thr=fog_params["entropy_thr"],
                 )
-                print(stats)
 
                 rgb_out.index_copy_(0, sel, rgb)
 

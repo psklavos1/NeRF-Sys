@@ -1,13 +1,13 @@
-# in viewer/colormap.py
 from dataclasses import dataclass
 from typing import Optional
+
 import torch
 from torch import Tensor
 
 
 @dataclass(frozen=True)
 class ColormapOptions:
-    colormap: str = "default"  # "default" -> "turbo"
+    colormap: str = "default"
     normalize: bool = False
     colormap_min: float = 0.0
     colormap_max: float = 1.0
@@ -74,7 +74,6 @@ def apply_depth_colormap(
 
     d = depth[..., 0]  # (...,)
 
-    # Valid = finite; optionally require a hint of accumulation
     valid = torch.isfinite(d)
     if use_acc_for_range and (accumulation is not None):
         acc = accumulation
@@ -123,10 +122,6 @@ def apply_depth_colormap(
     return colored
 
 
-import torch
-from torch import Tensor
-
-
 @torch.no_grad()
 def apply_pca_colormap(
     image: Tensor,  # (..., C) with C > 3
@@ -146,7 +141,6 @@ def apply_pca_colormap(
 
     x = image.reshape(-1, C)
 
-    # Valid rows: ignore all-zero vectors (often padding / masked)
     if ignore_zeros:
         valids = x.abs().amax(dim=-1) > 0
     else:

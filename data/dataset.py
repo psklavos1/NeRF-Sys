@@ -1,53 +1,22 @@
-import os
 from pathlib import Path
-from typing import Optional, Tuple
-
-
-import numpy as np
-from PIL import Image
+from typing import Optional, Tuple, List
 
 import torch
-from torch.utils.data.dataset import Dataset
-import torchvision.transforms as T
-
-from torchvision import datasets
-from torch.utils.data import Dataset
-from traitlets import List
 
 from .ram_rays_dataset import RamRaysDataset
 from .image_metadata import ImageMetadata
 from utils import discover_cluster_cells
 
-DATA_DIR = "./data"
-VOXCELEB_PATH = DATA_DIR + "/vox2_mp4"
-
-
-class ImgDataset(Dataset):
-    def __init__(self, data, sdf=False):
-        self.data = data
-        self.sdf = sdf
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        x = self.data[idx]
-        if not self.sdf:
-            x = x[0]
-        return {
-            "imgs": x,
-        }
-
-
 
 def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
+    """Build NeRF train/val ray datasets for 'drz' in flat or masked (cell) layout."""
+
     train_set = None
     test_set = None
     P.data_size = None
     if dataset == "drz":
         data_path = "." / Path(P.data_path) / "out" / P.data_dirname
 
-        # scene info
         coordinate_info = torch.load(data_path / "coordinates.pt", map_location="cpu")
         origin_drb, pose_scale_factor = (
             coordinate_info["origin_drb"],
@@ -82,7 +51,6 @@ def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
                 f"Using {len(train_metadata)} training and {len(val_metadata)} validation images."
             )
 
-            # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             kwargs = {"center_pixels": True, "ray_gen_kwargs": ray_gen_kwargs}
 
             print(f"Processing Training Images")
@@ -113,14 +81,11 @@ def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
             print(f"Discovered {mask_cells} cells in masks: {mask_root}")
 
             train_sets, val_sets = [], []
-            # Dataloading better in cpu to avoid changing multiple times from gpu to cpu
             expert_box_list = ray_gen_kwargs.pop("expert_box_list")
 
             for cell_id in range(P.num_submodules):
                 cell_mask_dir = mask_root / f"{cell_id}"
 
-                # Build metadata lists where each ImageMetadata has _mask_path set to this cell's file
-                # get_image_metadata(data_path, downscale, mask_dir) should set md._mask_path for each image
                 train_md, val_md = get_image_metadata(
                     data_path, P.downscale, cell_mask_dir, only_test
                 )
@@ -173,7 +138,6 @@ def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
                 if val_ds is not None and len(val_ds) > 0:
                     val_sets.append(val_ds)
 
-            # Set training metadata (ray-based)
             P.dim_in, P.dim_out = 6, 4
             P.data_type = "ray"
             return train_sets, val_sets
@@ -181,7 +145,6 @@ def get_dataset(P, dataset, only_test=False, ray_gen_kwargs: dict = None):
         raise NotImplementedError()
 
 
-# * Helpers
 def cap_metadata(md_list, cap_images):
     """Restrict ImageMetadata list if cap_images is set."""
     if cap_images is None or cap_images <= 0:
@@ -194,6 +157,8 @@ def cap_metadata(md_list, cap_images):
 
 
 def get_meta_lookups(train_md, val_md):
+    """Build H/W lookup dicts by image_index for train and val metadata lists."""
+
     train_meta_lookup = (
         {md.image_index: {"H": md.H, "W": md.W} for md in train_md}
         if train_md is not None and len(train_md) > 0
@@ -209,7 +174,7 @@ def get_meta_lookups(train_md, val_md):
 
 
 def _list_metadata_files(d: Path) -> List[Path]:
-    """Return sorted list of .pt files under directory d, or [] if d doesn't exist."""
+    """Return sorted .pt files under directory d, or [] if missing."""
     if not d.exists() or not d.is_dir():
         return []
     files = [p for p in d.iterdir() if p.is_file() and p.suffix == ".pt"]
@@ -224,11 +189,13 @@ def get_image_metadata(
     only_test: bool = False,
 ) -> Tuple[List[ImageMetadata], List[ImageMetadata]]:
     """
-    Load ImageMetadata in this priority:
-      1) Flat layout: <data_path>/metadata + <data_path>/rgbs  → treat as 'val' split (train=[]).
-      2) Split layout: <data_path>/train/metadata and (val|test)/metadata.
-         - Supports 'val' or 'test' as the evaluation split name.
-    Always returns (train_items, val_items). If nothing is found, returns ([], []).
+    Load ImageMetadata from a COLMAP-converted dataset.
+
+    Supports:
+      - Flat layout: <data_path>/{metadata,rgbs} → all as val, train=[].
+      - Split layout: <data_path>/train/metadata and val/ or test/ metadata.
+
+    Always returns (train_items, val_items); falls back to ([], []) if nothing is found.
     """
 
     root = Path(data_path)
@@ -239,9 +206,7 @@ def get_image_metadata(
     flat_meta = _list_metadata_files(flat_meta_dir)
 
     if flat_meta and flat_rgbs_dir.exists():
-        # Treat flat layout as "val" split; keep train empty.
-        all_paths = flat_meta[:]  # only these files exist
-        # Build consistent indices (by filename) across the discovered set
+        all_paths = flat_meta[:]
         image_indices = {
             p.name: i for i, p in enumerate(sorted(all_paths, key=lambda x: x.name))
         }
@@ -250,7 +215,7 @@ def get_image_metadata(
             get_metadata_item(p, image_indices[p.name], scale_factor, True, mask_dir)
             for p in flat_meta
         ]
-        train_items = [] if only_test else []  # explicit for readability
+        train_items = [] if only_test else []
         return train_items, val_items
 
     # ---- 2) Split layout: train + (val|test) ----
@@ -259,7 +224,6 @@ def get_image_metadata(
     test_meta_dir = root / "test" / "metadata"
 
     train_paths = _list_metadata_files(train_meta_dir)
-    # prefer 'val' if present; otherwise fall back to 'test'
     eval_paths = _list_metadata_files(val_meta_dir) or _list_metadata_files(
         test_meta_dir
     )
@@ -287,7 +251,6 @@ def get_image_metadata(
         ]
         return train_items, val_items
 
-    # ---- Nothing found: return two empty lists for consistency ----
     return [], []
 
 
@@ -298,8 +261,9 @@ def get_metadata_item(
     is_val: bool = False,
     mask_dir: Path | None = None,
 ) -> ImageMetadata:
-    image_path = None
+    """Load a single ImageMetadata entry from its .pt file and corresponding RGB image."""
 
+    image_path = None
     for extension in [".jpg", ".JPG", ".png", ".PNG"]:
         candidate = (
             metadata_path.parent.parent
@@ -310,7 +274,6 @@ def get_metadata_item(
             image_path = candidate
             break
 
-    # assert image_path.exists()
     if image_path is None:
         return
 

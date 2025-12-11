@@ -1,11 +1,10 @@
-import time
-
 import torch
 
 from common.utils import get_scheduler, is_resume
 from utils import MetricLogger, save_checkpoint
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def meta_trainer(
     P,
@@ -77,17 +76,17 @@ def meta_trainer(
         """ save model per save_step steps"""
         if step % P.save_step == 0:
             save_checkpoint(
-                    P,
-                    step,
-                    model,
-                    optimizer,
-                    logger.logdir,
-                    is_best=False,
-                    best=best,
-                    scheduler=scheduler,
-                    scaler=grad_scaler,
-                    keep_occ_grids=True,
-                )
+                P,
+                step,
+                model,
+                optimizer,
+                logger.logdir,
+                is_best=False,
+                best=best,
+                scheduler=scheduler,
+                scaler=grad_scaler,
+                keep_occ_grids=True,
+            )
 
     """ save last model"""
     save_checkpoint(

@@ -8,15 +8,9 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-
 class KafkaConsumer:
-    """
-    Minimal Kafka consumer for JSON config messages.
+    """Consume JSON messages from a single Kafka topic and return decoded Python objects."""
 
-    - Subscribes to a single topic.
-    - `receive()` blocks (with timeout polling) until a valid JSON message arrives.
-    - Returns the decoded Python object (usually a dict) or None on failure.
-    """
 
     def __init__(self, topic: str, config: Optional[Dict[str, Any]] = None, logger=None) -> None:
         self.logger = logging.getLogger(__name__) if logger is None else logger
@@ -36,12 +30,8 @@ class KafkaConsumer:
         )
 
     def receive(self, timeout: float = 1.0):
-        """
-        Poll Kafka until a valid JSON message is received.
-
-        :param timeout: poll timeout in seconds
-        :return: decoded JSON (usually dict) or None
-        """
+        """Poll for a JSON message and return its decoded payload, or None on failure."""
+        
         while True:
             msg = self.consumer.poll(timeout=timeout)
 
@@ -58,7 +48,6 @@ class KafkaConsumer:
                 continue
 
             try:
-                # assume utf-8 JSON
                 text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
                 data = json.loads(text)
                 return data

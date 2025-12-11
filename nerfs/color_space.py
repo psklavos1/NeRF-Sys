@@ -1,7 +1,6 @@
 import torch
 
 
-# Color handling
 def linear_to_srgb(x: torch.Tensor) -> torch.Tensor:
     x = x.clamp(0, 1)
     return torch.where(
@@ -31,7 +30,6 @@ def color_space_transformer(
     """
     cs = str(color_space).lower()
 
-    # Work in float32 for numerical stability of gamma/EOTF
     pred_lin32 = pred_linear.to(torch.float32)
     gt32 = gt_tensor.to(torch.float32).clamp(0, 1)
 
@@ -39,7 +37,6 @@ def color_space_transformer(
         # Compare in linear: convert GT sRGB -> linear
         pred = pred_lin32
         gt = srgb_to_linear(gt32)
-        # optional: clamp both to [0,1] in linear for fair PSNR/SSIM
         pred = pred.clamp(0, 1)
         gt = gt.clamp(0, 1)
 
@@ -47,13 +44,11 @@ def color_space_transformer(
         # Compare in sRGB: convert pred linear -> sRGB
         pred = linear_to_srgb(pred_lin32)
         gt = gt32
-        # clamp after conversion
         pred = pred.clamp(0, 1)
         gt = gt.clamp(0, 1)
 
     elif cs == "identity":
         # Only valid if dataset already supplies linear GT
-        # (assert here to avoid accidental misuse)
         if (gt32.max() > 1) or (gt32.min() < 0):
             raise ValueError(
                 "GT out of [0,1]; identity mode assumes normalized linear GT."

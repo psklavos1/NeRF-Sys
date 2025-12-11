@@ -1,4 +1,8 @@
 from typing import Optional, Tuple
+import warnings
+
+warnings.simplefilter("once", category=UserWarning)
+
 import torch
 from torch import Tensor
 import torch.nn.functional as F
@@ -11,10 +15,6 @@ from nerfs.ray_sampling import (
 )
 from models.trunc_exp import trunc_exp
 from nerfs.scene_box import SceneBox
-
-import warnings
-
-warnings.simplefilter("once", category=UserWarning)
 
 
 # ============================== BG helpers ===============================

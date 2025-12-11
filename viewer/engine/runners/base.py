@@ -15,7 +15,6 @@ class BaseRunner:
         self.fast = None
         self.k_steps = 0
 
-
     def start(self):
         pass
 
@@ -32,11 +31,13 @@ class BaseRunner:
         assert self.orig_state is not None, "no original state to reset to"
         self.model.load_state_dict(self.orig_state)
         self.optimizer.state.clear()
-        self.scaler = torch.cuda.amp.GradScaler(enabled=bool(getattr(self.P, "use_amp", False)))
+        self.scaler = torch.cuda.amp.GradScaler(
+            enabled=bool(getattr(self.P, "use_amp", False))
+        )
         self.k_steps = 0
 
         try:
-            self._reset_progress()   # hook: implemented by subclasses that track progress bars
+            self._reset_progress()  # hook: implemented by subclasses that track progress bars
         except Exception:
             pass
         self.log("fast params reset")
@@ -88,7 +89,7 @@ class BaseRunner:
         support_rays: Optional[int] = None,
         ray_samples: Optional[int] = None,
         chunk_points: Optional[int] = None,
-        batch_size: Optional[int] = None,  # <- fix name
+        batch_size: Optional[int] = None,
         log_update: bool = False,
     ):
         """
@@ -99,30 +100,27 @@ class BaseRunner:
         """
         if batch_size is not None:
             bs = int(batch_size)
-            # reflect to P for logging/serialization if you like
             setattr(self.P, "test_batch_size", bs)
             setattr(self.P, "batch_size", bs)
-            # tell the runner to rebuild meta loader (& thus support stream) next step
             runner = getattr(self, "runner", None)
             if runner is not None and hasattr(runner, "set_test_batch_size"):
                 runner.set_test_batch_size(bs)
 
         if sigma_lr is not None:
             setattr(self.P, "sigma_lr", float(sigma_lr))
-            
+
         if color_lr is not None:
             setattr(self.P, "color_lr", float(color_lr))
-        
+
         if encoding_lr is not None:
             setattr(self.P, "encoding_lr", float(encoding_lr))
-        
+
         if not (color_lr is None and sigma_lr is None and encoding_lr is None):
             self.sync_optimizer_lrs()
-        
+
         if support_rays is not None:
             sr = int(support_rays)
             setattr(self.P, "support_rays", sr)
-            # tell the runner to rebuild the support stream next step
             runner = getattr(self, "runner", None)
             if runner is not None and hasattr(runner, "invalidate_support_stream"):
                 runner.invalidate_support_stream()
@@ -183,6 +181,7 @@ class BaseRunner:
 
             if lr is not None:
                 group["lr"] = float(lr)
-    
+
+
 class ViewRunner(BaseRunner):
     pass

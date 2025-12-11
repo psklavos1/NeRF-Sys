@@ -5,7 +5,6 @@ from typing import Literal, Optional
 import torch
 import torch.nn as nn
 
-# Optional TCNN backend
 try:
     import tinycudann as tcnn
 

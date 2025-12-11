@@ -38,12 +38,17 @@ import cv2
 from tqdm import tqdm
 import pymap3d as pm
 
-# Project helpers
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from data.colmap_utils import qvec2rotmat, read_model, get_cam_intrinsics
-from data.transformations import ellipsoid_wgs84, ecef_to_enu_rot, ENU_TO_DRB, RDF_TO_RUB
-# -------------------- CLI --------------------
+from data.transformations import (
+    ellipsoid_wgs84,
+    ecef_to_enu_rot,
+    ENU_TO_DRB,
+    RDF_TO_RUB,
+)
 
+
+# -------------------- CLI --------------------
 def parse_args() -> Namespace:
     p = argparse.ArgumentParser(
         description="Append only NEW images to an existing prepared dataset (consistent with main preparer)."
@@ -95,9 +100,6 @@ def parse_args() -> Namespace:
         help="At the end, print ENU→geodetic reconversion for the newly added images (requires ENU ref).",
     )
     return p.parse_args()
-
-
-# -------------------- core --------------------
 
 
 def main(hp: Namespace):

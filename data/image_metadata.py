@@ -1,11 +1,36 @@
+"""
+This module is an extension of the implementation of MegaNeRF's image_metadata.py tailored for our system.
+https://github.com/cmusatyalab/mega-nerf/blob/main/mega_nerf/image_metadata.py
+
+Copyright (c) 2021 cmusatyalab
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
+from pathlib import Path
+from zipfile import ZipFile
+from PIL import Image
 import warnings
 
 warnings.filterwarnings(
     "ignore", message="The given NumPy array is not writable", category=UserWarning
 )
-from pathlib import Path
-from zipfile import ZipFile
-from PIL import Image
 
 import numpy as np
 import torch
@@ -99,7 +124,7 @@ class ImageMetadata:
 
 
 class ImageMetaDataset(Dataset):
-    def __init__(self, meta_list):  # list[ImageMetadata]
+    def __init__(self, meta_list: list[ImageMetadata]):
         self.items = meta_list
 
     def __len__(self):

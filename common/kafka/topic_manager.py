@@ -4,10 +4,11 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 from confluent_kafka.admin import AdminClient, NewTopic
-
 DEFAULT_KAFKA_BROKER = "localhost:9092"
 
 class KafkaTopicManager:
+    """Create Kafka topics if they do not already exist."""
+
     def __init__(self, broker: str = DEFAULT_KAFKA_BROKER, logger=None):
         self.logger = logging.getLogger(__name__) if logger is None else logger
         self.broker = broker
@@ -22,7 +23,6 @@ class KafkaTopicManager:
         existing_topics = self.admin.list_topics(timeout=5).topics
 
         if topic_name in existing_topics:
-            # self.logger.info(f"Topic '{topic_name}' already exists.")
             return
 
         topic = NewTopic(

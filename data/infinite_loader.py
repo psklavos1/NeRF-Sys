@@ -4,21 +4,9 @@ from torch.utils.data import DataLoader
 
 class InfiniteDataLoader:
     """
-    A wrapper that turns any finite DataLoader into an infinite one.
+    Wrap a DataLoader to yield batches indefinitely, restarting on each epoch end.
 
-    It will automatically:
-    - Restart at the end of each epoch.
-    - Reshuffle when the underlying DataLoader uses shuffle=True or a RandomSampler.
-    - Keep workers alive if persistent_workers=True.
-    - Yield batches forever (no StopIteration).
-
-    Example:
-        base_loader = DataLoader(dataset, batch_size=64, shuffle=True)
-        loader = InfiniteDataLoader(base_loader)
-
-        for i, batch in enumerate(loader):
-            ...
-            if i > 1000: break   # user decides when to stop
+    Automatically handles shuffling, worker reuse, and StopIteration.
     """
 
     def __init__(self, dataloader: DataLoader):
@@ -28,7 +16,6 @@ class InfiniteDataLoader:
         self._iterator = iter(self.dataloader)
 
     def __iter__(self):
-        # Makes this class usable in `for batch in loader:` loops.
         return self
 
     def __next__(self):
@@ -40,7 +27,6 @@ class InfiniteDataLoader:
             batch = next(self._iterator)
         return batch
 
-    # optional convenience for explicit use
     def next(self):
         """Return next batch (alias for `next(loader)`)."""
         return self.__next__()
@@ -50,5 +36,4 @@ class InfiniteDataLoader:
         self._iterator = iter(self.dataloader)
 
     def __len__(self):
-        # Length of one epoch (if needed for info)
         return len(self.dataloader)

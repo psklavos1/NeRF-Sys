@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from typing import Sequence, Tuple, Union
-import torch
-import viser.transforms as vtf
-
-from torch import Tensor
 from jaxtyping import Float
+
+import torch
+from torch import Tensor
+import viser.transforms as vtf
 
 
 @dataclass

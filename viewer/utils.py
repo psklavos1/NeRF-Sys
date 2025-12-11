@@ -1,13 +1,10 @@
-# ---------------- Tonemaps (Depth / Opacity) ----------------
-
 import math
 import os
-from typing import Optional
-import numpy as np
-import torch
-import os, re
+import re
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Optional
+
+import numpy as np
 import torch
 
 from nerfs.color_space import linear_to_srgb

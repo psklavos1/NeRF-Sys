@@ -47,7 +47,7 @@ def task_adapt(
             )
 
         if grad_buf:
-            # FIM/EWC provided ready-weighted grads (dict keyed by param name)
+            # FIM provided ready-weighted grads (dict keyed by param name)
             grads = (grad_buf.get(n, None) for n in fast.keys())
         else:
             # Plain MSE: grads for fast params
@@ -58,21 +58,17 @@ def task_adapt(
                 allow_unused=True,
             )
 
-        # analyze_grads(grads, fast=fast, topk=3, name="inner_loop")
-        # input()
         fast = OrderedDict(
             (n, w if g is None else (w - inner_lr * g.to(w.dtype)))
             for (n, w), g in zip(fast.items(), grads)
         )
-
-        # SGD update on fast params; cast grad to param dtype to be safe under AMP
 
         inner_losses.append(loss.detach())
 
     return fast, inner_losses
 
 
-def runtime_adapt(
+def runtime_adapt_legacy(
     *,
     P,
     model,
@@ -127,13 +123,16 @@ def runtime_adapt(
 
     return fast, {"loss": (0.0 if last_loss is None else last_loss)}
 
+
 def runtime_adapt_inplace(
     *,
     P,
     model,
-    data_loader: Iterable,         # yields (rays, rgbs)
+    data_loader: Iterable,  # yields (rays, rgbs)
     optimizer: torch.optim.Optimizer,
-    steps: Optional[int] = None,   # number of optimizer steps (None => run all batches once)
+    steps: Optional[
+        int
+    ] = None,  # number of optimizer steps (None => run all batches once)
     active_module: Optional[int] = None,
     grad_clip: Optional[float] = 1.0,
 ) -> Dict[str, float]:
@@ -156,11 +155,14 @@ def runtime_adapt_inplace(
     # Case 1: no explicit step budget -> old behavior (one pass over data_loader)
     if steps is None:
         for rays, rgbs in data_loader:
-            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(device, non_blocking=True)
+            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(
+                device, non_blocking=True
+            )
 
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=use_amp and torch.cuda.is_available(),
-                                         dtype=torch.float16):
+            with torch.cuda.amp.autocast(
+                enabled=use_amp and torch.cuda.is_available(), dtype=torch.float16
+            ):
                 loss = compute_mse_loss(
                     P,
                     model=base,
@@ -183,7 +185,7 @@ def runtime_adapt_inplace(
             step_count += 1
 
     # TODO: needs to be cleaned up. maintain until viewer side is reorganized!
-    # Case 2: explicit step budget -> loop over loader indefinitely 
+    # Case 2: explicit step budget -> loop over loader indefinitely
     else:
         steps = int(steps)
         data_iter = iter(data_loader)
@@ -195,11 +197,14 @@ def runtime_adapt_inplace(
                 data_iter = iter(data_loader)
                 rays, rgbs = next(data_iter)
 
-            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(device, non_blocking=True)
+            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(
+                device, non_blocking=True
+            )
 
             optimizer.zero_grad()
-            with torch.cuda.amp.autocast(enabled=use_amp and torch.cuda.is_available(),
-                                         dtype=torch.float16):
+            with torch.cuda.amp.autocast(
+                enabled=use_amp and torch.cuda.is_available(), dtype=torch.float16
+            ):
                 loss = compute_mse_loss(
                     P,
                     model=base,
@@ -259,21 +264,22 @@ def meta_update(
         )
     else:
         raise ValueError(f"Unsupported algo {algo!r}")
-    
+
     with torch.no_grad():
         for cid, expert in enumerate(model.submodules):
             total_norm = 0.0
             for p in expert.parameters():
                 if p.grad is not None:
                     total_norm += p.grad.norm().item() ** 2
-            total_norm = total_norm ** 0.5
+            total_norm = total_norm**0.5
             print(f"debug/outer_grad_norm_region_{cid}: ", total_norm)
-        
+
     if scheduler is not None:
         scheduler.step()
-        
+
     lrs = [g["lr"] for g in optimizer.param_groups]
     print(f"group LRs = {lrs}")
+
 
 def clip_all_grads(optimizer, grad_clip=1.0):
     if grad_clip is None:
@@ -286,7 +292,9 @@ def clip_all_grads(optimizer, grad_clip=1.0):
     if params:
         torch.nn.utils.clip_grad_norm_(params, grad_clip)
 
+
 import torch
+
 
 def maml_meta_update(optimizer, loss_out, scaler=None, grad_clip=1.0):
     if not torch.isfinite(loss_out):
@@ -298,9 +306,9 @@ def maml_meta_update(optimizer, loss_out, scaler=None, grad_clip=1.0):
     if use_amp:
         # AMP branch: scale loss, backward, unscale, clip, step via scaler
         scaler.scale(loss_out).backward()
-        scaler.unscale_(optimizer)          # make grads real for clipping
+        scaler.unscale_(optimizer)  # make grads real for clipping
         clip_all_grads(optimizer, grad_clip)
-        scaler.step(optimizer)              # IMPORTANT: use scaler.step
+        scaler.step(optimizer)  # IMPORTANT: use scaler.step
         scaler.update()
     else:
         # FP32 branch
@@ -365,9 +373,11 @@ def snapshot_params(model):
     """Return a {name: tensor} snapshot of meta-parameters θ (detached)."""
     return {n: p.detach().clone() for n, p in model.meta_named_parameters()}
 
+
 def snapshot_model_dict(model):
     """Return a state_dict snapshot of meta-parameters θ (detached)."""
     return {n: p.detach().clone() for n, p in model.state_dict().items()}
+
 
 # =============================================================================
 # Debugging helpers

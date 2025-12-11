@@ -8,7 +8,6 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-
 class KafkaProducer:
     """
     Minimal Kafka producer for JSON messages.
@@ -17,10 +16,8 @@ class KafkaProducer:
     def __init__(self, config: Optional[Dict[str, Any]] = None, logger=None) -> None:
         self.logger = logging.getLogger(__name__) if logger is None else logger
         config = dict(config) if config is not None else {}
-
         self.broker = config.get("bootstrap.servers", "localhost:9092")
         config.setdefault("bootstrap.servers", self.broker)
-
         self.producer = Producer(config)
 
     def send(self, topic: str, message: Any) -> None:

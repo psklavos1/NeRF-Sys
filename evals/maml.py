@@ -1,35 +1,36 @@
 import warnings
 
-from data.ram_rays_dataset import RamRaysDataset
-
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
+
 import time
 from pathlib import Path
-from torch.amp import autocast
 
 import torch
-from torch.utils.data import DataLoader
 import torch.nn.functional as F
-import lpips  # Learned Perceptual Image Patch Similarity
-from pytorch_msssim import ssim  # Structural similarity metrics
+from torch.amp import autocast
+from torch.utils.data import DataLoader
+import lpips
+from pytorch_msssim import ssim
 from imageio import imwrite
 
-from utils import collate_rays, psnr
-from utils import MetricLogger
-from common.utils import to_device_tree
-
+from utils import collate_rays, psnr, MetricLogger
+from common.utils import to_device_tree, get_optimizer
+from data.ram_rays_dataset import RamRaysDataset
 from nerfs.losses import compute_mse_loss
 from nerfs.color_space import linear_to_srgb, color_space_transformer
 from nerfs.ray_rendering import render_image
-from nerfs.meta_learning import (
-    task_adapt,
-    runtime_adapt_inplace as runtime_adapt,
-)
-from common.utils import get_optimizer
+from nerfs.meta_learning import task_adapt, runtime_adapt_inplace as runtime_adapt
 
-def validate_nerf_model(P, model, test_loader, steps, logger):
+
+def validate_nerf_model(P, model, test_loader, steps, logger) -> float:
+    """
+    Evaluate meta-learned NeRF generalization to unseen views.
+
+    Builds support/query tasks from test_loader, performs inner-loop adaptation
+    per task, and returns the sample-weighted PSNR over query rays.
+    """
     model.eval()
-    P.fim = False  
+    P.fim = False  # disable FIM during eval if present
 
     device = next(model.parameters()).device
     inner_lr = P.inner_lr
@@ -39,10 +40,8 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
     tasks_cap = int(getattr(P, "max_test_tasks", 5))
     tasks_seen = 0
 
-    # ------ global accumulators  ------
     support_loss_sum_global = torch.tensor(0.0, device=device)
     support_ray_count_global = 0
-
     query_loss_sum_global = torch.tensor(0.0, device=device)
     query_ray_count_global = 0
 
@@ -51,18 +50,10 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
         task_data = to_device_tree(task_data, device)
         cids = sorted(task_data.keys())
 
-        # ------ per-region accumulators ------
-        region_inner_sum = {cid: torch.tensor(0.0, device=device) for cid in cids}
-        region_inner_count = {cid: 0 for cid in cids}
-        region_query_sum = {cid: torch.tensor(0.0, device=device) for cid in cids}
-        region_query_count = {cid: 0 for cid in cids}
-
-        # ------ iterate regions and tasks ------
         for cid in cids:
             for task in task_data[cid]:
                 sup_i, qry_i = task["support"], task["query"]
 
-                # number of rays for proper weighting (matching training)
                 n_sup = int(sup_i["rays"].shape[0])
                 n_q = int(qry_i["rays"].shape[0])
 
@@ -70,7 +61,7 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
                     logger.log(f"[EVAL][WARN] Empty task in region {cid}; skipping.")
                     continue
 
-                # Inner adaptation on SUPPORT → fast weights + inner loss trace
+                # Inner adaptation on support rays
                 fast, inner_losses = task_adapt(
                     P,
                     model,
@@ -83,9 +74,9 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
                     inner_losses[-1]
                     if inner_losses
                     else torch.tensor(0.0, device=device)
-                )  # mean over support rays
+                )
 
-                # Query loss AFTER adaptation (θ*) — mean per-ray 
+                # Query loss after adaptation
                 with torch.no_grad(), autocast(
                     device_type="cuda",
                     enabled=mixed_precision,
@@ -100,20 +91,11 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
                         reduction="mean",
                     )
 
-                # sample-weighted accumulators (like train_step_ray)
                 support_loss_sum_global += inner_last.detach() * n_sup
                 support_ray_count_global += n_sup
-
                 query_loss_sum_global += qa.detach() * n_q
                 query_ray_count_global += n_q
 
-                region_inner_sum[cid] += inner_last.detach() * n_sup
-                region_inner_count[cid] += n_sup
-
-                region_query_sum[cid] += qa.detach() * n_q
-                region_query_count[cid] += n_q
-
-        # per-loader-batch timing (seconds per batch)
         batch_time = time.time() - batch_start_t
         metric_logger.meters["batch_time"].update(batch_time, n=1)
         metric_logger.meters["eval_context"].update(len(cids), n=1)
@@ -122,15 +104,15 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
         if tasks_seen >= tasks_cap:
             break
 
-    # Guard against empty evaluation
     if query_ray_count_global == 0:
-        logger.log("[EVAL] No valid query rays found in test_loader; returning PSNR=0.0")
+        logger.log(
+            "[EVAL] No valid query rays found in test_loader; returning PSNR=0.0"
+        )
         model.train(True)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return 0.0
 
-    # ------ Global metrics (sample-weighted means) ------
     loss_in_global = (
         support_loss_sum_global / support_ray_count_global
         if support_ray_count_global > 0
@@ -140,7 +122,6 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
     psnr_in_global = psnr(loss_in_global)
     psnr_out_global = psnr(loss_out_global)
 
-    # ------ Metric logger ------
     metric_logger.meters["loss_in"].update(
         float(loss_in_global), n=support_ray_count_global
     )
@@ -158,7 +139,6 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # ------ Logging ------
     logger.log(
         " * [EVAL] [LossIn %.6f] [LossOut %.6f] [PSNRIn %.3f] [PSNROut %.3f]"
         % (
@@ -176,6 +156,7 @@ def validate_nerf_model(P, model, test_loader, steps, logger):
 
     return float(metric_logger.psnr_out.global_avg)
 
+
 def runtime_evaluate_model(
     P,
     model,
@@ -183,33 +164,40 @@ def runtime_evaluate_model(
     steps,
     logger,
     scene_box,
-) -> float:
+) -> dict:
     """
-    Phase A: For each image batch in test_loader -> build RamRaysDataset -> shuffled support loader -> runtime_adapt (cumulative).
-    Phase B: Render & score all test images with the final 'fast'.
+    Runtime task adaptation and full-image evaluation.
+
+    Phase A: for each batch of image metadata, build a RamRaysDataset of support
+    rays and adapt the model in-place (runtime_adapt).
+
+    Phase B: render all test images with the adapted model and compute PSNR,
+    SSIM, and LPIPS over the image set.
     """
     device = next(model.parameters()).device
     use_amp = bool(getattr(P, "use_amp", False))
     num_support = int(getattr(P, "support_rays", 4096))
     ray_samples = int(getattr(P, "ray_samples", 64))
     chunk_points = int(getattr(P, "chunk_points", 1 << 16))
-    metrics_space = getattr(P, "color_space", "linear")  # 'linear'|'srgb'|'identity'
+    metrics_space = getattr(P, "color_space", "linear")
 
-    print(f"======================================= TTO: {P.tto} =======================================")
-    # -------- Phase A: Adaptation over support rays built per image batch --------
+    logger.log(
+        f"======================================= TTO: {getattr(P, 'tto', P.inner_iter)} ======================================="
+    )
+
+    # Phase A: adaptation on support rays
     model.train(True)
     total_support = 0
-    logger.log("[Phase 1] Task Adaptation on validation images")
+    logger.log("[Phase 1] Task adaptation on validation images")
     total_batches = 0
-    
-    optimizer = get_optimizer(P,model)
+
+    optimizer = get_optimizer(P, model)
     t_adapt_start = time.time()
 
     for batch in test_loader:
         total_batches += 1
-        metas = batch["metas"]  # list of meta dict/objects
+        metas = batch["metas"]
 
-        # Build RamRaysDataset directly from this image batch
         rays_ds = RamRaysDataset(
             metas,
             center_pixels=True,
@@ -224,9 +212,9 @@ def runtime_evaluate_model(
         data_loader = DataLoader(
             rays_ds,
             batch_size=num_support,
-            shuffle=True,  # IMPORTANT: randomize support rays each epoch
+            shuffle=True,
             drop_last=False,
-            num_workers=4,  # safer in eval; increase if you like
+            num_workers=4,
             persistent_workers=True,
             prefetch_factor=4,
             pin_memory=True,
@@ -234,11 +222,7 @@ def runtime_evaluate_model(
         )
 
         out = runtime_adapt(
-            P=P,
-            model=model,
-            data_loader=data_loader,
-            optimizer=optimizer,
-            steps=steps
+            P=P, model=model, data_loader=data_loader, optimizer=optimizer, steps=steps
         )
 
         logger.log(
@@ -246,18 +230,18 @@ def runtime_evaluate_model(
         )
         del rays_ds
 
-    # finish timing (Phase A)
     if device.type == "cuda":
         torch.cuda.synchronize()
     adapt_time_sec = time.time() - t_adapt_start
 
     logger.log(
-        f"[ADAPTATION END] [{adapt_time_sec:.2f}s] Total support rays seen (with shuffling by loader): {total_support} in {total_batches} Batches."
+        f"[ADAPTATION END] [{adapt_time_sec:.2f}s] Total support rays seen: "
+        f"{total_support} in {total_batches} batches."
     )
     torch.cuda.empty_cache()
 
-    # -------- Phase B: Render & metrics --------
-    logger.log("[Phase 2] Rendering Images")
+    # Phase B: rendering and metrics
+    logger.log("[Phase 2] Rendering images")
 
     model.eval()
     scorer_lpips = lpips.LPIPS(net="alex").to(device)
@@ -279,7 +263,7 @@ def runtime_evaluate_model(
             H, W = int(md.H), int(md.W)
             fx, fy, cx, cy = md.intrinsics.flatten().tolist()[:4]
             c2w = md.c2w
-            gt_img_srgb = (rgbs[b].float() / 255.0).clamp_(0, 1).to(device)  # HxWx3
+            gt_img_srgb = (rgbs[b].float() / 255.0).clamp_(0, 1).to(device)
 
             with torch.cuda.amp.autocast(enabled=use_amp, dtype=torch.float16):
                 pred_lin, _, _ = render_image(
@@ -299,7 +283,6 @@ def runtime_evaluate_model(
                     use_amp=use_amp,
                 )
 
-            # ---- metrics
             pred_bchw_lin = pred_lin.permute(2, 0, 1).unsqueeze(0)
             gt_bchw_srgb = gt_img_srgb.permute(2, 0, 1).unsqueeze(0)
             pred_bchw, gt_bchw = color_space_transformer(
@@ -310,19 +293,15 @@ def runtime_evaluate_model(
             psnr_val = (-10.0 * torch.log10(mse.clamp_min(1e-8))).item()
             ssim_val = ssim(pred_bchw, gt_bchw, data_range=1.0).mean().item()
 
-            # LPIPS on sRGB in [-1,1]
             if metrics_space == "srgb":
-                pred_srgb_img = pred_bchw  # NCHW
+                pred_srgb_img = pred_bchw
             else:
-                pred_srgb_img = (
-                    linear_to_srgb(pred_lin).permute(2, 0, 1).unsqueeze(0)
-                )  # NCHW
+                pred_srgb_img = linear_to_srgb(pred_lin).permute(2, 0, 1).unsqueeze(0)
 
-            pred_lp = pred_srgb_img * 2 - 1  # NCHW in [-1,1]
-            gt_lp = gt_bchw_srgb * 2 - 1  # NCHW in [-1,1]
+            pred_lp = pred_srgb_img * 2 - 1
+            gt_lp = gt_bchw_srgb * 2 - 1
             lpips_val = scorer_lpips(pred_lp, gt_lp).mean().item()
 
-            # log/save
             meter.meters["psnr"].update(psnr_val, n=1)
             meter.meters["ssim"].update(ssim_val, n=1)
             meter.meters["lpips"].update(lpips_val, n=1)
@@ -336,7 +315,7 @@ def runtime_evaluate_model(
             )
 
             pred_srgb = (
-                ((pred_srgb_img.squeeze(0).permute(1, 2, 0).clamp(0, 1) * 255.0) + 0.5)
+                (pred_srgb_img.squeeze(0).permute(1, 2, 0).clamp(0, 1) * 255.0 + 0.5)
                 .byte()
                 .cpu()
                 .numpy()
@@ -357,5 +336,11 @@ def runtime_evaluate_model(
     logger.scalar_summary("eval/psnr", meter.psnr.global_avg, num_support)
     logger.scalar_summary("eval/ssim", meter.ssim.global_avg, num_support)
     logger.scalar_summary("eval/lpips", meter.lpips.global_avg, num_support)
-    metrics = {"psnr": meter.psnr.global_avg, "ssim": meter.ssim.global_avg, "lpips": meter.lpips.global_avg, "duration": float(adapt_time_sec)}
+
+    metrics = {
+        "psnr": meter.psnr.global_avg,
+        "ssim": meter.ssim.global_avg,
+        "lpips": meter.lpips.global_avg,
+        "duration": float(adapt_time_sec),
+    }
     return metrics

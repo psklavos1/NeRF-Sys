@@ -1,5 +1,6 @@
 import random
 import time
+
 import torch
 from torch.amp import autocast
 
@@ -47,14 +48,14 @@ def train_step_ray(
     rnd = random.Random(getattr(P, "seed", 0) + step)
     rnd.shuffle(cids)
     num_regions = len(cids)
-    
+
     region_inner_sum = {cid: torch.tensor(0.0, device=device) for cid in cids}
     region_inner_count = {cid: 0 for cid in cids}
     region_query_sum = {cid: torch.tensor(0.0, device=device) for cid in cids}
     region_query_count = {cid: 0 for cid in cids}
-    
+
     time_setup += time.perf_counter() - t0
-    
+
     # -------- iterate regions and tasks --------
     for cid in cids:
         region_tasks = task_data[cid]
@@ -71,7 +72,7 @@ def train_step_ray(
             sup_i = to_device_tree(sup_i, device)
             qry_i = to_device_tree(qry_i, device)
             time_data += time.perf_counter() - t1
-            
+
             if getattr(P, "fim", False) and hasattr(expert_nerf, "fim_reset"):
                 expert_nerf.fim_reset()
 
@@ -102,7 +103,7 @@ def train_step_ray(
             region_inner_sum[cid] += last_inner_loss.detach() * n_sup
             region_inner_count[cid] += n_sup
 
-            # ----- QUERY: evaluate with adapted params ----- 
+            # ----- QUERY: evaluate with adapted params -----
             t3 = time.perf_counter()
             with autocast(
                 device_type="cuda",
@@ -126,7 +127,9 @@ def train_step_ray(
     total_q = sum(region_query_count[cid] for cid in cids)
 
     if total_q == 0:
-        logger.log("[WARN] train_step_ray: no query samples in any region; skipping step")
+        logger.log(
+            "[WARN] train_step_ray: no query samples in any region; skipping step"
+        )
         return
 
     region_loss_in = {
@@ -151,10 +154,12 @@ def train_step_ray(
         if total_sup > 0
         else torch.tensor(0.0, device=device)
     )
-    loss_out = sum(region_query_sum[cid] for cid in cids) / total_q # mean for logging
+    loss_out = sum(region_query_sum[cid] for cid in cids) / total_q  # mean for logging
 
     # loss_out_meta = loss_out # fed avg in this case
-    loss_out_meta = num_regions * loss_out # fed-avg scaled by regions so that K does not affect result
+    loss_out_meta = (
+        num_regions * loss_out
+    )  # fed-avg scaled by regions so that K does not affect result
 
     # -------- OUTER: meta update --------
     t4 = time.perf_counter()
@@ -167,7 +172,7 @@ def train_step_ray(
         grad_scaler=grad_scaler,
     )
     time_outer += time.perf_counter() - t4
-    
+
     if getattr(model, "use_occ", False):
         model.maybe_update_expert_occupancies(step, params=None)
 
@@ -175,15 +180,13 @@ def train_step_ray(
         torch.cuda.synchronize()
 
     t_step_total = time.perf_counter() - t_step_start
-    t_misc = max(
-        0.0, t_step_total - (time_setup + time_data +time_inner + time_outer)
-    )
+    t_misc = max(0.0, t_step_total - (time_setup + time_data + time_inner + time_outer))
     # -------- global metrics --------
-    metric_logger.meters["batch_time"].update(t_step_total, n=1)         
-    metric_logger.meters["tasks"].update(total_tasks, n=1)                
-    metric_logger.meters["loss_in"].update(float(loss_in), n=total_sup)   
+    metric_logger.meters["batch_time"].update(t_step_total, n=1)
+    metric_logger.meters["tasks"].update(total_tasks, n=1)
+    metric_logger.meters["loss_in"].update(float(loss_in), n=total_sup)
     metric_logger.meters["psnr_in"].update(float(psnr(loss_in)), n=total_sup)
-    metric_logger.meters["loss_out"].update(float(loss_out), n=total_q)   
+    metric_logger.meters["loss_out"].update(float(loss_out), n=total_q)
     metric_logger.meters["psnr_out"].update(float(psnr(loss_out)), n=total_q)
     metric_logger.synchronize_between_processes()
 

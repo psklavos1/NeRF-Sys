@@ -1,5 +1,28 @@
 #!/usr/bin/env python3
 """
+This is an extenstion of MegaNeRF's:
+https://github.com/cmusatyalab/mega-nerf/blob/main/scripts/colmap_to_mega_nerf.py
+
+Copyright (c) 2021 cmusatyalab
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 COLMAP → (optional ECEF→ENU) → DRB → RUB (OpenGL-style storage)
 ================================================================
 
@@ -171,7 +194,6 @@ def parse_args() -> Namespace:
         default=200.0,
         help="Max allowed height below lowest camera (m).",
     )
-    # Optional end-of-run ENU→Geodetic verification (no behavior change by default)
     p.add_argument(
         "--verify_enu_geodetic",
         action="store_true",

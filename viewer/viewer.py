@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Lightweight nerfview/Viser adapter for --op view.
 
@@ -8,12 +7,10 @@ Design:
 - At render time, incoming viewer pose (RUB) → DRB before get_rays.
 """
 
-from __future__ import annotations
-
-from functools import lru_cache
 import os
 import sys
 import time
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -21,10 +18,10 @@ import imageio.v3 as iio
 import numpy as np
 import torch
 import viser
+import nerfview
 import viser.transforms as tf
 from rich.console import Console
 
-import nerfview
 from nerfs.ray_rendering import render_rays
 from nerfs.ray_sampling import clamp_rays_near_far, get_ray_directions, get_rays
 from nerfs.scene_box import SceneBox
@@ -42,7 +39,7 @@ from viewer.utils import (
     verify_continual_batch_dir,
 )
 
-CONSOLE = Console(width=120,file=sys.stderr)
+CONSOLE = Console(width=120, file=sys.stderr)
 
 
 # ========= Data classes & local caches =========
@@ -53,7 +50,6 @@ class Preset:
 
     @property
     def kwargs(self) -> dict:
-        # keep signature stable, even though cone_angle is unused in your renderer
         return dict(
             ray_samples=self.ray_samples,
             early_stop_eps=self.early_stop_eps,
@@ -64,7 +60,6 @@ class Preset:
 # Device-tensor cache: (H,W,fx,fy,cx,cy,device.type,device.index) -> torch.Tensor (on device)
 @lru_cache(maxsize=8)
 def _cached_ray_dirs_key(H, W, fx, fy, cx, cy):
-    # cache on CPU as numpy; cheap and VRAM-safe
     dirs = get_ray_directions(
         int(H),
         int(W),
@@ -122,7 +117,7 @@ def launch_viewer(
         server = viser.ViserServer(
             host=host, port=port, verbose=False, open_browser=open_browser
         )
-    except TypeError:  # old viser versions
+    except TypeError:
         server = viser.ViserServer(host=host, port=port, verbose=False)
     server.scene.world_axes.visible = True
 
@@ -137,7 +132,6 @@ def launch_viewer(
     }
     training_state = {"target_steps": 0}  # Start/Continue semantics
     viewer_state = {"running": True}
-
 
     # ----- Visuals (background, samples/eps, occupancy, modules) -----
     with server.add_gui_folder("Visuals", expand_by_default=False):
@@ -188,7 +182,9 @@ def launch_viewer(
             )
             gui_depth_inv = server.add_gui_checkbox("Inverse (near bright)", True)
 
-        opacity_folder = server.add_gui_folder("Tonemap — Opacity", expand_by_default=False)
+        opacity_folder = server.add_gui_folder(
+            "Tonemap — Opacity", expand_by_default=False
+        )
         with opacity_folder:
             gui_acc_cmap = server.add_gui_dropdown(
                 "Colormap",
@@ -199,12 +195,11 @@ def launch_viewer(
         # Hide them initially
         depth_folder.visible = False
         opacity_folder.visible = False
-        
+
         with server.add_gui_folder("Lighting", expand_by_default=True):
             gui_exposure = server.add_gui_slider("Exposure", 0.5, 2.0, 0.01, 1.0)
             gui_gamma = server.add_gui_slider("Gamma", 0.8, 2.2, 0.01, 1.0)
 
-        
         with server.add_gui_folder("Clipping", expand_by_default=False):
             gui_nf_enable = server.add_gui_checkbox("Override Near/Far", True)
             # default_near_m = scene_extent_world / 400.0
@@ -224,12 +219,12 @@ def launch_viewer(
                 step=0.001,
                 initial_value=default_far_m,
             )
+
         @gui_display.on_update
         def _(_):
             mode = gui_display.value
-            depth_folder.visible = (mode == "Depth")
-            opacity_folder.visible = (mode == "Opacity")
-
+            depth_folder.visible = mode == "Depth"
+            opacity_folder.visible = mode == "Opacity"
 
     # ----- Camera control helpers -----
     def _c2w_to_quat_pos(c2w_np: np.ndarray):
@@ -278,7 +273,7 @@ def launch_viewer(
 
             btn_terminate = client.gui.add_button(
                 "Terminate Viewer",
-                color="red", 
+                color="red",
             )
 
         def _bind(btn, fn):
@@ -289,9 +284,15 @@ def launch_viewer(
                     _set_pose(client, fn(c2w.astype(np.float32)))
 
         _bind(btn_center, lambda c2w: pose_look_center(c2w, level=False))
-        _bind(btn_front, lambda c2w: pose_snap_dir(c2w, np.array([0, 0, -1], np.float32)))
-        _bind(btn_right, lambda c2w: pose_snap_dir(c2w, np.array([1, 0, 0], np.float32)))
-        _bind(btn_bottom, lambda c2w: pose_snap_dir(c2w, np.array([0, -1, 0], np.float32)))
+        _bind(
+            btn_front, lambda c2w: pose_snap_dir(c2w, np.array([0, 0, -1], np.float32))
+        )
+        _bind(
+            btn_right, lambda c2w: pose_snap_dir(c2w, np.array([1, 0, 0], np.float32))
+        )
+        _bind(
+            btn_bottom, lambda c2w: pose_snap_dir(c2w, np.array([0, -1, 0], np.float32))
+        )
         _bind(btn_in, lambda c2w: pose_dolly(c2w, forward=True))
         _bind(btn_out, lambda c2w: pose_dolly(c2w, forward=False))
 
@@ -317,11 +318,8 @@ def launch_viewer(
             except Exception:
                 pass
 
-            CONSOLE.print(
-                "[bold red] Terminating viewer on user request...[/bold red]"
-            )
+            CONSOLE.print("[bold red] Terminating viewer on user request...[/bold red]")
             # server.stop()
-
 
     # ----- Training: widgets & controller -----
     with server.add_gui_folder("Operation Mode", expand_by_default=False):
@@ -339,11 +337,9 @@ def launch_viewer(
         gui_step = server.add_gui_button("Step Once", visible=False)
 
         # Batch dir + scan
-        gui_batch_dir = server.add_gui_text(
-            "Batch directory", "", visible=False
-        )
+        gui_batch_dir = server.add_gui_text("Batch directory", "", visible=False)
         gui_scan = server.add_gui_button("Scan & Verify", visible=False)
-        
+
         runtime_folder = server.add_gui_folder(
             "Runtime Controls", expand_by_default=False
         )
@@ -469,6 +465,7 @@ def launch_viewer(
         on_paused=_show_controls_paused,
         on_idle=_show_controls_idle,
     )
+
     # ----- Training actions -----
     @gui_scan.on_click
     def _(_):
@@ -531,7 +528,7 @@ def launch_viewer(
             gui_adapt_steps,
             gui_batch_size,
             gui_sigma_lr,
-            gui_color_lr,            
+            gui_color_lr,
             gui_encoding_lr,
         )
 
@@ -633,14 +630,16 @@ def launch_viewer(
     @gui_color_lr.on_update
     def _(_):
         _apply(lambda: ctrl.update_train_hparams(color_lr=float(gui_color_lr.value)))
-        
+
     @gui_sigma_lr.on_update
     def _(_):
         _apply(lambda: ctrl.update_train_hparams(sigma_lr=float(gui_sigma_lr.value)))
-        
+
     @gui_encoding_lr.on_update
     def _(_):
-        _apply(lambda: ctrl.update_train_hparams(encoding_lr=float(gui_encoding_lr.value)))
+        _apply(
+            lambda: ctrl.update_train_hparams(encoding_lr=float(gui_encoding_lr.value))
+        )
 
     @gui_support_rays.on_update
     def _(_):
@@ -727,7 +726,7 @@ def launch_viewer(
             FULL.ray_samples, PREVIEW.ray_samples = int(gui_full_samples.value), int(
                 gui_prev_samples.value
             )
-            
+
             state["display"] = str(gui_display.value)
             state["zoom"] = float(gui_zoom.value)
             state["exposure"] = float(gui_exposure.value)

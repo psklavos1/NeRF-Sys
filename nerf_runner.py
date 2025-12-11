@@ -201,9 +201,8 @@ def build_context(P, op: str) -> dict:
             "image_cap": 0.4,
             "min_rays_cell": int((P.support_rays + P.query_rays) * 0.5),
             "assignment_checkpoint": 0.7,
-            "debug": False,
             "routing_policy": "dda",
-            "cells": (1, P.cell_dim, P.cell_dim),
+            "cells": (1, P.cell_dim, P.cell_dim)
         }
         print("Creating tasks...")
         train_wrapped = [

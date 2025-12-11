@@ -44,7 +44,7 @@ def compute_fim_loss(
     clamp_factor=5,
 ) -> torch.Tensor:
     """
-    Fisher-weighted loss (Algorithm 1).
+    Fisher-weighted loss.
     - SUPPORT path (need_grads=True): returns scalar loss and fills `grad_buffer` with
       *weighted* grads for the tracked params; optionally updates the Fisher from UNWEIGHTED grads.
     - QUERY path (need_grads=False): returns scalar loss only; does NOT update the Fisher.
@@ -52,9 +52,7 @@ def compute_fim_loss(
     This function does exactly ONE forward pass. In per-sample mode it uses TWO autograd.grad
     calls on the same graph (retain first) to get exact Σ w_i ∇ℓ_i without per-sample grad tensors.
     """
-    need_grads = bool(grad_buffer) or bool(
-        update_fisher
-    )  # SUPPORT iff we need grads/Fisher
+    need_grads = bool(grad_buffer) or bool(update_fisher)
 
     # ---- forward once ----
     gt_rgb = data["rgbs"]
@@ -93,7 +91,6 @@ def compute_fim_loss(
     #  - SUPPORT+per-sample (a second grad call follows).
     retain_first = (not need_grads) or per_sample
 
-    # ---- grads of base loss (for weight computation and Fisher update) ----
     grad_base = torch.autograd.grad(
         base_loss,
         tracked_tensors,
@@ -107,7 +104,6 @@ def compute_fim_loss(
 
     # ---- compute weights and loss ----
     if per_sample:
-        # per-sample proxy weights; detach to avoid second-order through weights
         w_i = expert_module.fim_loss.fim_weight(
             grad_dict,
             mse_i=mse_i,
@@ -130,21 +126,19 @@ def compute_fim_loss(
         )
 
     else:
-        # batch-scalar weight (exact, cheap)
+        # batch-scalar weight
         w = expert_module.fim_loss.fim_weight(
             grad_dict, per_sample=False, clamp=(1 / clamp_factor, clamp_factor)
-        )  # scalar
+        )
         fim_loss = w.detach() * base_loss
 
         if not need_grads:
             # QUERY: return scalar; no Fisher update, no inner grads
             return fim_loss
 
-        # SUPPORT: weighted grads without second grad call
         wd = w.detach()
         grad_weighted = [None if g is None else (wd * g) for g in grad_base]
 
-    # ---- SUPPORT-only bookkeeping ----
     if update_fisher and grad_dict:
         with torch.no_grad():
             fs.update_from_grads({k: v.pow(2) for k, v in grad_dict.items()})
@@ -152,9 +146,7 @@ def compute_fim_loss(
     if grad_buffer is not None:
         for name, g in zip(tracked_names, grad_weighted):
             if g is not None:
-                grad_buffer[name] = (
-                    g  # already weighted grads, ready for the fast update
-                )
+                grad_buffer[name] = g
 
     return fim_loss
 
