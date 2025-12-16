@@ -19,7 +19,6 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-# --- your project imports (paths may differ in your repo) ---
 from data.task_dataset import TaskDataset
 from common.args import parse_args
 from utils import (
@@ -32,7 +31,7 @@ from utils import (
     load_scene_boxes,
 )
 from common.utils import get_optimizer
-from utils import load_model_checkpoint, resolve_logdir_from_job_id
+from utils import load_model_checkpoint, resolve_checkpoint_dir
 from data.dataset import get_dataset, get_image_metadata
 from data.image_metadata import ImageMetaDataset
 from data.multi_loader import MultiLoader
@@ -76,11 +75,9 @@ def build_context(P, op: str) -> dict:
 
     # resolve checkpoint path from job ID if needed
     if getattr(P, "checkpoint_path", None):
-        chkpt = Path(P.checkpoint_path)
-        if not chkpt.is_dir():
-            P.checkpoint_path = resolve_logdir_from_job_id(P.checkpoint_path)
-    print("Using checkpoint path: ", P.checkpoint_path)
-    
+        P.checkpoint_path = resolve_checkpoint_dir(P.checkpoint_path, logs_root="logs")
+    print("Using checkpoint path:", P.checkpoint_path)
+
     # ---- clustering meta / SceneBox ----
     mask_dir = Path(P.data_path) / "out" / P.data_dirname / "masks" / P.mask_dirname
     print(mask_dir)
@@ -125,23 +122,29 @@ def build_context(P, op: str) -> dict:
 
     # ---- occupancy config for the container ----
     occ_conf = {
-            "use_occ": P.use_occ,
-            "resolution": 128,  # per-level grid resolution
-            "levels": 4,  # number of levels (multi-scale grid)
-            "render_step_size": None,  # if None, defaults to scene_diag / 1000.0
-            "occ_thre": 1e-2,  # final opacity threshold (after warmup)
-            "alpha_thre": 1e-2,  # final opacity threshold (after warmup)
-            "alpha_thre_start": 0.0,  # starting alpha threshold
-            "alpha_thre_end": 1e-2,  # end alpha threshold (can equal alpha_thre)
-            "cosine_anneal": True,  # smooth cosine ramp-up of alpha_thre
-            "warmup_steps": 256,  # number of steps with alpha_thre=0 # !
-            "update_interval": 16,  # update every N steps after warmup# !
-            "ema_decay": 0.95,  # smoothing factor for occ density updates
-            "cone_angle": .004,  # for step size scaling with ray depth
-            "near_plane": P.near if P.near is not None else .05/ coordinate_info["pose_scale_factor"], # frustum start
-            "far_plane": P.far if P.far is not None else 1e3/coordinate_info["pose_scale_factor"],  # frustum end
-            "occ_frozen": False,  # set True to stop updating grid
-            "occ_ready": False,  # internal flag; leave False at init
+        "use_occ": P.use_occ,
+        "resolution": 128,  # per-level grid resolution
+        "levels": 4,  # number of levels (multi-scale grid)
+        "render_step_size": None,  # if None, defaults to scene_diag / 1000.0
+        "occ_thre": 1e-2,  # final opacity threshold (after warmup)
+        "alpha_thre": 1e-2,  # final opacity threshold (after warmup)
+        "alpha_thre_start": 0.0,  # starting alpha threshold
+        "alpha_thre_end": 1e-2,  # end alpha threshold (can equal alpha_thre)
+        "cosine_anneal": True,  # smooth cosine ramp-up of alpha_thre
+        "warmup_steps": 256,  # number of steps with alpha_thre=0 # !
+        "update_interval": 16,  # update every N steps after warmup# !
+        "ema_decay": 0.95,  # smoothing factor for occ density updates
+        "cone_angle": 0.004,  # for step size scaling with ray depth
+        "near_plane": (
+            P.near
+            if P.near is not None
+            else 0.05 / coordinate_info["pose_scale_factor"]
+        ),  # frustum start
+        "far_plane": (
+            P.far if P.far is not None else 1e3 / coordinate_info["pose_scale_factor"]
+        ),  # frustum end
+        "occ_frozen": False,  # set True to stop updating grid
+        "occ_ready": False,  # internal flag; leave False at init
     }
 
     boundary_margin = min(max(1, P.bm), clustering_params["boundary_margin"])
@@ -202,7 +205,7 @@ def build_context(P, op: str) -> dict:
             "min_rays_cell": int((P.support_rays + P.query_rays) * 0.5),
             "assignment_checkpoint": 0.7,
             "routing_policy": "dda",
-            "cells": (1, P.cell_dim, P.cell_dim)
+            "cells": (1, P.cell_dim, P.cell_dim),
         }
         print("Creating tasks...")
         train_wrapped = [
@@ -248,16 +251,14 @@ def build_context(P, op: str) -> dict:
         ctx["optimizer"] = get_optimizer(P, ctx["model"])
 
     elif op in ["eval", "video"]:
-        
+
         if not getattr(P, "checkpoint_path", None):
             raise ValueError("--checkpoint_path is required when --op eval")
-      
+
         # metadata-only eval loader (kept as you had it)
         data_path = Path(P.data_path) / "out" / P.data_dirname
-        _, test_meta_list = get_image_metadata(
-            data_path, P.downscale, only_test=False
-        )
-       
+        _, test_meta_list = get_image_metadata(data_path, P.downscale, only_test=False)
+
         test_meta = ImageMetaDataset(test_meta_list)
         ctx["test_loader"] = DataLoader(
             test_meta,
@@ -339,7 +340,7 @@ def eval(ctx: dict):
     for step in tto_list:
         P.tto = step
         set_random_seed(P.seed)
-        
+
         # reset model to meta-learned initialization
         model.load_state_dict(base_state)
 
@@ -353,11 +354,13 @@ def eval(ctx: dict):
         )
 
         all_results.append(
-            {"tto_steps": step,
-             "psnr": metrics["psnr"],
-             "ssim": metrics["ssim"],
-             "lpips": metrics["lpips"],
-             "duration": metrics["duration"]}
+            {
+                "tto_steps": step,
+                "psnr": metrics["psnr"],
+                "ssim": metrics["ssim"],
+                "lpips": metrics["lpips"],
+                "duration": metrics["duration"],
+            }
         )
 
     df = pd.DataFrame(all_results).sort_values("tto_steps").reset_index(drop=True)
@@ -444,7 +447,6 @@ def view(ctx: dict):
     if timeout is None:
         timeout = -1
 
-
     if timeout > 0:
         end = time.time() + timeout
         while time.time() < end and viewer.viewer_state["running"]:
@@ -471,7 +473,8 @@ def view(ctx: dict):
                 viewer.stop()
             except Exception:
                 pass
-    
+
+
 # -----------------------------
 # Entrypoint
 # -----------------------------

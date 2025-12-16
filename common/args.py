@@ -232,6 +232,9 @@ def parse_args():
                 continue
             setattr(args, k, v)
 
+    if args.checkpoint_path == "":
+        args.checkpoint_path = None
+
     if args.fname is None:
         from datetime import datetime
 

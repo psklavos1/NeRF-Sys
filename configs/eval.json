@@ -4,7 +4,7 @@
   "seed": 0,
   "dataset": "drz",
   "data_path": "data/drz/",
-  "data_dirname": "balanced",
+  "data_dirname": "example",
   "mask_dirname": "g22_grid_bm110_ss11",
   "downscale": 0.25,
   
@@ -25,8 +25,7 @@
   "color_lr": 0.002,
   "bg_lr": 0.001,
 
-  "checkpoint_path": "ddd9e54323f7",
+  "checkpoint_path": "example",
   "prefix": "step5",
-
   "tto": "1"
 }

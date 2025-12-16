@@ -50,15 +50,15 @@ class Logger(object):
             logdir = self._resolve_unique_dir(logdir)
             os.makedirs(logdir, exist_ok=True)
             self.set_dir(logdir)
-            
+
     def _resolve_unique_dir(self, path: str) -> str:
         """
-        If `path` exists and is not empty, return path_v1, path_v2, ... 
+        If `path` exists and is not empty, return path_v1, path_v2, ...
         until a free name is found.
         """
         if not os.path.exists(path) or len(os.listdir(path)) == 0:
             return path  # free or empty
-        
+
         base = path
         idx = 1
         while True:
@@ -66,7 +66,6 @@ class Logger(object):
             if not os.path.exists(new_path):
                 return new_path
             idx += 1
-
 
     def _make_dir(self, fn):
         if self.today:
@@ -705,14 +704,51 @@ def load_scene_boxes(
 
     return global_box, local_boxes
 
-def resolve_logdir_from_job_id(job_id: str, logs_root: str = "logs") -> str:
-    base = Path(logs_root) / job_id
-    if not base.exists():
-        raise FileNotFoundError(f"No logs found for job_id={job_id} under {logs_root}")
-    runs = sorted(
-        [d for d in base.iterdir() if d.is_dir()],
-        key=lambda p: p.name,
-    )
-    if not runs:
-        raise FileNotFoundError(f"No runs found for job_id={job_id} under {base}")
-    return str(runs[-1])   # latest by name (date + optional _vN)
+
+def _contains_model_files(d: Path) -> bool:
+    return d.is_dir() and any(f.is_file() and f.suffix == ".model" for f in d.iterdir())
+
+
+def resolve_checkpoint_dir(value: str, logs_root: str = "logs") -> str:
+    """
+    Resolve and return the directory that contains checkpoint files (*.model).
+
+    Input may be:
+      - a run directory
+      - a job directory
+      - the same paths with or without the 'logs/' prefix
+
+    Resolution:
+      - If the directory contains *.model files, return it.
+      - Otherwise, repeatedly descend into the latest subdirectory (by name)
+        until a directory containing *.model files is found.
+
+    The returned path is the actual resolved filesystem path
+    (including 'logs/' if that is where the checkpoints live).
+    """
+    p = Path(value)
+
+    # logs/ is optional in input, but resolution must reflect reality
+    if not p.exists():
+        p = Path(logs_root) / value
+
+    if not p.exists() or not p.is_dir():
+        raise FileNotFoundError(
+            f"Checkpoint path not found: '{value}' (or '{Path(logs_root) / value}')"
+        )
+
+    cur = p
+    for _ in range(8):  # safety bound
+        if _contains_model_files(cur):
+            return str(cur.resolve())
+
+        subdirs = sorted(
+            [d for d in cur.iterdir() if d.is_dir()],
+            key=lambda x: x.name,
+        )
+        if not subdirs:
+            break
+
+        cur = subdirs[-1]  # descend into latest run
+
+    raise FileNotFoundError(f"No '*.model' checkpoints found under: {p}")

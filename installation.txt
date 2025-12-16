@@ -1,0 +1,39 @@
+# 0) Check driver
+nvidia-smi
+
+# 1) Create env
+conda create -n nerfenv python=3.11 -y
+conda activate nerfenv
+
+# 2) Install PyTorch with CUDA runtime 11.8
+conda install -y pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia
+
+# 3) Verify torch CUDA
+python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("torch cuda runtime:", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("gpu:", torch.cuda.get_device_name(0))
+PY
+
+# 4) Install python deps
+pip install -r requirements.txt
+
+# 5)
+# IMPORTANT: tiny-cuda-nn requires an nvcc toolchain. Your system nvcc may be mismatched.
+# Install CUDA 11.8 nvcc inside conda and force PATH to use it.
+conda install -y -c nvidia cuda-nvcc=11.8 cuda-cudart-dev=11.8
+export CUDA_HOME="$CONDA_PREFIX"
+export PATH="$CONDA_PREFIX/bin:$PATH"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+
+nvcc --version   # should say 11.8
+
+pip install --no-build-isolation -v "git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch"
+
+# If tiny-cuda-nn build fails due to compiler/CUDA host compiler issues, install a compatible GCC toolchain:
+conda install -y -c conda-forge gxx_linux-64=11
+export CC="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-gcc"
+export CXX="$CONDA_PREFIX/bin/x86_64-conda-linux-gnu-g++"

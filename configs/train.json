@@ -5,7 +5,7 @@
   "seed": 0,
   "dataset": "drz",
   "data_path": "data/drz/",
-  "data_dirname": "balanced",
+  "data_dirname": "example",
   "mask_dirname": "g22_grid_bm110_ss11",
   "downscale": 0.25,
 
@@ -46,7 +46,7 @@
   "decay_factor": 10.0,
 
   "checkpoint_path": "",
-  "prefix": "best",
+  "prefix": "step20000",
   "use_stored_args": false,
 
   "outer_steps": 5,

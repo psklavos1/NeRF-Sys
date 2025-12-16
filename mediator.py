@@ -10,19 +10,17 @@ import threading
 import logging
 from pathlib import Path
 
-from common.kafka import KafkaConsumer
-from common.kafka.topic_manager import KafkaTopicManager
+from common.kafka import KafkaConsumer, KafkaTopicManager
 
 NERF_PROC = "nerf_runner.py"
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-
 logger = logging.getLogger("Mediator")
 
 
 # ---------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------
-def setup_logging():
+def setup_logging(cleanup: bool = False):
     logs_dir = Path("logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -33,14 +31,16 @@ def setup_logging():
 
     fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    file_handler = logging.FileHandler(str(log_path), mode="w")
+    file_handler = logging.FileHandler(str(log_path), mode="w" if cleanup else "a")
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     logger.addHandler(console)
-
+    logger.info(
+        f"============================ Starting Mediator ============================"
+    )
     logger.info(f"Mediator logging to {log_path}")
 
 
@@ -196,7 +196,6 @@ def run_nerf_thread(cfg: dict, job_id: str, devices: str | None) -> int:
 # Entrypoint
 # ---------------------------------------------------------------------
 def main():
-    setup_logging()
 
     parser = argparse.ArgumentParser(description="NeRF Job Mediator")
     parser.add_argument("--broker", type=str, default="localhost:9092")
@@ -212,12 +211,19 @@ def main():
             'If omitted or set to "all", all GPUs remain visible.'
         ),
     )
+    parser.add_argument(
+        "--cleanup", action="store_true", help="Clean up old mediator logs"
+    )
+
     args = parser.parse_args()
 
+    setup_logging(args.cleanup)
+
     logger.info("NeRF Mediator starting...")
+    dev_str = args.devices if args.devices is not None else "all"
     logger.info(
         f"Kafka Broker: {args.broker} | Topic: {args.topic} | "
-        f"Group: {args.group_id} | Device: {'cuda:' + args.devices or 'cuda'}"
+        f"Group: {args.group_id} | Device: {'cuda:' + dev_str}"
     )
 
     topic_mgr = KafkaTopicManager(args.broker, logger=logger)

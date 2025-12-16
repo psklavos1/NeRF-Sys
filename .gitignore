@@ -157,7 +157,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-logs/
+logs/*
+!logs/example/
+!logs/example/**
 log_dir/
 
 data/celeba
@@ -171,7 +173,11 @@ data/shapenetchairs
 data/shapenetlamps
 data/MatrixCity
 data/imagenette
-# data/drz
+data/drz/*
+!data/drz/out/
+data/drz/out/*
+!data/drz/out/example/
+!data/drz/out/example/**
 
 # Cached
 .pt 

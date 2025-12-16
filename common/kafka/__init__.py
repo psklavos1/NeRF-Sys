@@ -6,4 +6,4 @@ from .consumer import KafkaConsumer
 from .producer import KafkaProducer
 from .topic_manager import KafkaTopicManager
 
-__all__ = ["KafkaConsumer", "KafkaProducer", "KafkaTopicManager", "SerializerRegistry"]
+__all__ = ["KafkaConsumer", "KafkaProducer", "KafkaTopicManager"]
