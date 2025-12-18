@@ -7,7 +7,7 @@ from torch.amp import autocast
 from utils import psnr
 from common.utils import to_device_tree
 from nerfs.losses import compute_loss
-from meta_core import (
+from .meta_core import (
     task_adapt,
     meta_update,
 )

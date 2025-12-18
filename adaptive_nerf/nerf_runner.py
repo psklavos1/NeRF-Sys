@@ -302,7 +302,7 @@ def train(ctx: dict):
 
     P = ctx["P"]
 
-    train_func, test_func, _ = setup(P.algo, P)
+    train_func, test_func, _, _ = setup(P.algo, P)
 
     ctx["logger"].log(P)
     ctx["logger"].log(ctx["model"])
@@ -475,12 +475,11 @@ def view(ctx: dict):
             except Exception:
                 pass
 
-
 # -----------------------------
 # Entrypoint
 # -----------------------------
 def main():
-    P = parse_args()  # contains --op and everything else
+    P = parse_args()  
     ctx = build_context(P, P.op)
 
     if P.op == "train":
