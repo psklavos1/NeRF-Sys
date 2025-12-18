@@ -6,7 +6,7 @@ import argparse
 import logging
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from common.kafka import KafkaProducer, KafkaTopicManager
+from kafka_utils import KafkaProducer, KafkaTopicManager
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"

@@ -10,10 +10,11 @@ import threading
 import logging
 from pathlib import Path
 
-from common.kafka import KafkaConsumer, KafkaTopicManager
+from kafka_utils import KafkaConsumer, KafkaTopicManager
 
 NERF_PROC = "nerf_runner.py"
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+NERF_DIR = "adaptive_nerf"
+ROOT_DIR = Path(__file__).resolve().parent
 logger = logging.getLogger("Mediator")
 
 
@@ -163,7 +164,7 @@ def run_nerf_thread(cfg: dict, job_id: str, devices: str | None) -> int:
         process = launch_process(
             script=NERF_PROC,
             config_path=tmp_path,
-            cwd=ROOT_DIR,
+            cwd=ROOT_DIR / NERF_DIR,
             devices=devices,
         )
         process.wait()

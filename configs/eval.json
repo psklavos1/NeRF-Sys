@@ -26,6 +26,6 @@
   "bg_lr": 0.001,
 
   "checkpoint_path": "example",
-  "prefix": "step5",
+  "prefix": "step20000",
   "tto": "1"
 }
