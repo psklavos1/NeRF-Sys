@@ -1,11 +1,11 @@
 from collections import OrderedDict
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import List
 import numpy as np
 
 import torch
 from torch.amp import autocast
 
-from .losses import compute_loss, compute_mse_loss
+from nerfs.losses import compute_loss
 
 
 # =============================================================================
@@ -68,167 +68,6 @@ def task_adapt(
     return fast, inner_losses
 
 
-def runtime_adapt_legacy(
-    *,
-    P,
-    model,
-    data_loader: Iterable,  # yields (rays:[B,8], rgbs:[B,3]) shuffled
-    inner_lr: float = 1e-3,
-    active_module: Optional[int] = None,
-    params_in: Optional[OrderedDict] = None,
-) -> Tuple[OrderedDict, Dict[str, float]]:
-    """
-    Loader-driven runtime adaptation:
-      for (rays, rgbs) in data_loader:
-        loss(params) -> grads -> SGD step
-      carries 'fast' across all batches.
-    """
-    device = next(model.parameters()).device
-    use_amp = bool(getattr(P, "use_amp", False))
-    algo = str(getattr(P, "algo", "")).lower()
-    first_order = algo in ("fomaml", "reptile")
-
-    base = model.submodules[active_module] if active_module is not None else model
-    fast = (
-        params_in
-        if params_in is not None
-        else extract_module_params(base, copy=(algo == "reptile"))
-    )
-
-    last_loss: Optional[float] = None
-
-    for rays, rgbs in data_loader:
-        rays = rays.to(device, non_blocking=True)
-        rgbs = rgbs.to(device, non_blocking=True)
-
-        with autocast(device_type="cuda", enabled=use_amp, dtype=torch.float16):
-            loss = compute_mse_loss(
-                P,
-                model=model,
-                data={"rays": rays, "rgbs": rgbs},
-                params=fast,
-                active_module=active_module,
-                reduction="mean",
-            )
-
-        grads = torch.autograd.grad(
-            loss, tuple(fast.values()), create_graph=not first_order, allow_unused=True
-        )
-
-        updated = OrderedDict()
-        for (name, w), g in zip(fast.items(), grads):
-            updated[name] = w if g is None else (w - inner_lr * g.to(w.dtype))
-        fast = updated
-        last_loss = float(loss.detach())
-
-    return fast, {"loss": (0.0 if last_loss is None else last_loss)}
-
-
-def runtime_adapt_inplace(
-    *,
-    P,
-    model,
-    data_loader: Iterable,  # yields (rays, rgbs)
-    optimizer: torch.optim.Optimizer,
-    steps: Optional[
-        int
-    ] = None,  # number of optimizer steps (None => run all batches once)
-    active_module: Optional[int] = None,
-    grad_clip: Optional[float] = 1.0,
-) -> Dict[str, float]:
-    """
-    Run in-place adaptation: optimizer updates the model parameters directly.
-    If `steps` is None: iterate over data_loader once (one epoch).
-    If `steps` is an int: perform exactly `steps` optimizer updates, looping over
-    data_loader as many times as needed (infinite stream semantics).
-    """
-    device = next(model.parameters()).device
-    use_amp = bool(getattr(P, "use_amp", True))
-
-    model.train()
-    base = model.submodules[active_module] if active_module is not None else model
-
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and torch.cuda.is_available())
-    last_loss = None
-    step_count = 0
-
-    # Case 1: no explicit step budget -> old behavior (one pass over data_loader)
-    if steps is None:
-        for rays, rgbs in data_loader:
-            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(
-                device, non_blocking=True
-            )
-
-            optimizer.zero_grad()
-            with torch.cuda.amp.autocast(
-                enabled=use_amp and torch.cuda.is_available(), dtype=torch.float16
-            ):
-                loss = compute_mse_loss(
-                    P,
-                    model=base,
-                    data={"rays": rays, "rgbs": rgbs},
-                    params=None,
-                    active_module=active_module,
-                    reduction="mean",
-                )
-
-            scaler.scale(loss).backward()
-
-            if grad_clip is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip)
-
-            scaler.step(optimizer)
-            scaler.update()
-
-            last_loss = float(loss.detach())
-            step_count += 1
-
-    # TODO: needs to be cleaned up. maintain until viewer side is reorganized!
-    # Case 2: explicit step budget -> loop over loader indefinitely
-    else:
-        steps = int(steps)
-        data_iter = iter(data_loader)
-        while step_count < steps:
-            try:
-                rays, rgbs = next(data_iter)
-            except StopIteration:
-                # restart a new epoch over the same support set
-                data_iter = iter(data_loader)
-                rays, rgbs = next(data_iter)
-
-            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(
-                device, non_blocking=True
-            )
-
-            optimizer.zero_grad()
-            with torch.cuda.amp.autocast(
-                enabled=use_amp and torch.cuda.is_available(), dtype=torch.float16
-            ):
-                loss = compute_mse_loss(
-                    P,
-                    model=base,
-                    data={"rays": rays, "rgbs": rgbs},
-                    params=None,
-                    active_module=active_module,
-                    reduction="mean",
-                )
-
-            scaler.scale(loss).backward()
-
-            if grad_clip is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip)
-
-            scaler.step(optimizer)
-            scaler.update()
-
-            last_loss = float(loss.detach())
-            step_count += 1
-
-    return {"loss": (0.0 if last_loss is None else last_loss), "steps": step_count}
-
-
 # =============================================================================
 # Meta update
 # =============================================================================
@@ -279,21 +118,6 @@ def meta_update(
 
     lrs = [g["lr"] for g in optimizer.param_groups]
     print(f"group LRs = {lrs}")
-
-
-def clip_all_grads(optimizer, grad_clip=1.0):
-    if grad_clip is None:
-        return
-    params = []
-    for group in optimizer.param_groups:
-        for p in group["params"]:
-            if p.grad is not None:
-                params.append(p)
-    if params:
-        torch.nn.utils.clip_grad_norm_(params, grad_clip)
-
-
-import torch
 
 
 def maml_meta_update(optimizer, loss_out, scaler=None, grad_clip=1.0):
@@ -354,6 +178,18 @@ def reptile_meta_update(P, model, fast_list):
     )
 
 
+def clip_all_grads(optimizer, grad_clip=1.0):
+    if grad_clip is None:
+        return
+    params = []
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if p.grad is not None:
+                params.append(p)
+    if params:
+        torch.nn.utils.clip_grad_norm_(params, grad_clip)
+
+
 # =============================================================================
 # Model helpers
 # =============================================================================
@@ -380,7 +216,7 @@ def snapshot_model_dict(model):
 
 
 # =============================================================================
-# Debugging helpers
+# Debug Helpers
 # =============================================================================
 
 

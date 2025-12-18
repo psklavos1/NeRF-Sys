@@ -1,163 +1,27 @@
+from typing import Dict, Iterable, Optional
+import time
+from pathlib import Path
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="torchvision")
 
-import time
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch.amp import autocast
 from torch.utils.data import DataLoader
 import lpips
 from pytorch_msssim import ssim
 from imageio import imwrite
 
-from utils import collate_rays, psnr, MetricLogger
-from common.utils import to_device_tree, get_optimizer
+from utils import collate_rays, MetricLogger
+from common.utils import get_optimizer
 from data.ram_rays_dataset import RamRaysDataset
-from nerfs.losses import compute_mse_loss
 from nerfs.color_space import linear_to_srgb, color_space_transformer
 from nerfs.ray_rendering import render_image
-from nerfs.meta_learning import task_adapt, runtime_adapt_inplace as runtime_adapt
+from nerfs.losses import compute_mse_loss
 
 
-def validate_nerf_model(P, model, test_loader, steps, logger) -> float:
-    """
-    Evaluate meta-learned NeRF generalization to unseen views.
-
-    Builds support/query tasks from test_loader, performs inner-loop adaptation
-    per task, and returns the sample-weighted PSNR over query rays.
-    """
-    model.eval()
-    P.fim = False  # disable FIM during eval if present
-
-    device = next(model.parameters()).device
-    inner_lr = P.inner_lr
-    iterations = int(getattr(P, "tto", getattr(P, "inner_iter", 1)))
-    mixed_precision = bool(getattr(P, "mixed_precision", False))
-    metric_logger = MetricLogger(delimiter="  ")
-    tasks_cap = int(getattr(P, "max_test_tasks", 5))
-    tasks_seen = 0
-
-    support_loss_sum_global = torch.tensor(0.0, device=device)
-    support_ray_count_global = 0
-    query_loss_sum_global = torch.tensor(0.0, device=device)
-    query_ray_count_global = 0
-
-    for task_data in test_loader:
-        batch_start_t = time.time()
-        task_data = to_device_tree(task_data, device)
-        cids = sorted(task_data.keys())
-
-        for cid in cids:
-            for task in task_data[cid]:
-                sup_i, qry_i = task["support"], task["query"]
-
-                n_sup = int(sup_i["rays"].shape[0])
-                n_q = int(qry_i["rays"].shape[0])
-
-                if n_sup == 0 or n_q == 0:
-                    logger.log(f"[EVAL][WARN] Empty task in region {cid}; skipping.")
-                    continue
-
-                # Inner adaptation on support rays
-                fast, inner_losses = task_adapt(
-                    P,
-                    model,
-                    sup_i,
-                    inner_lr,
-                    iterations,
-                    active_module=cid,
-                )
-                inner_last = (
-                    inner_losses[-1]
-                    if inner_losses
-                    else torch.tensor(0.0, device=device)
-                )
-
-                # Query loss after adaptation
-                with torch.no_grad(), autocast(
-                    device_type="cuda",
-                    enabled=mixed_precision,
-                    dtype=torch.float16,
-                ):
-                    qa = compute_mse_loss(
-                        P,
-                        model=model,
-                        data=qry_i,
-                        params=fast,
-                        active_module=cid,
-                        reduction="mean",
-                    )
-
-                support_loss_sum_global += inner_last.detach() * n_sup
-                support_ray_count_global += n_sup
-                query_loss_sum_global += qa.detach() * n_q
-                query_ray_count_global += n_q
-
-        batch_time = time.time() - batch_start_t
-        metric_logger.meters["batch_time"].update(batch_time, n=1)
-        metric_logger.meters["eval_context"].update(len(cids), n=1)
-
-        tasks_seen += 1
-        if tasks_seen >= tasks_cap:
-            break
-
-    if query_ray_count_global == 0:
-        logger.log(
-            "[EVAL] No valid query rays found in test_loader; returning PSNR=0.0"
-        )
-        model.train(True)
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        return 0.0
-
-    loss_in_global = (
-        support_loss_sum_global / support_ray_count_global
-        if support_ray_count_global > 0
-        else torch.tensor(0.0, device=device)
-    )
-    loss_out_global = query_loss_sum_global / query_ray_count_global
-    psnr_in_global = psnr(loss_in_global)
-    psnr_out_global = psnr(loss_out_global)
-
-    metric_logger.meters["loss_in"].update(
-        float(loss_in_global), n=support_ray_count_global
-    )
-    metric_logger.meters["psnr_in"].update(
-        float(psnr_in_global), n=support_ray_count_global
-    )
-    metric_logger.meters["loss_out"].update(
-        float(loss_out_global), n=query_ray_count_global
-    )
-    metric_logger.meters["psnr_out"].update(
-        float(psnr_out_global), n=query_ray_count_global
-    )
-    metric_logger.synchronize_between_processes()
-
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    logger.log(
-        " * [EVAL] [LossIn %.6f] [LossOut %.6f] [PSNRIn %.3f] [PSNROut %.3f]"
-        % (
-            metric_logger.loss_in.global_avg,
-            metric_logger.loss_out.global_avg,
-            metric_logger.psnr_in.global_avg,
-            metric_logger.psnr_out.global_avg,
-        )
-    )
-    logger.scalar_summary("eval/tto", float(iterations), steps)
-    logger.scalar_summary("eval/loss_in", metric_logger.loss_in.global_avg, steps)
-    logger.scalar_summary("eval/loss_out", metric_logger.loss_out.global_avg, steps)
-    logger.scalar_summary("eval/psnr_in", metric_logger.psnr_in.global_avg, steps)
-    logger.scalar_summary("eval/psnr_out", metric_logger.psnr_out.global_avg, steps)
-
-    return float(metric_logger.psnr_out.global_avg)
-
-
-def runtime_evaluate_model(
+def runtime_evaluate(
     P,
     model,
     test_loader,  # ImageMetaDataset DataLoader
@@ -344,3 +208,108 @@ def runtime_evaluate_model(
         "duration": float(adapt_time_sec),
     }
     return metrics
+
+
+def runtime_adapt(
+    *,
+    P,
+    model,
+    data_loader: Iterable,  # yields (rays, rgbs)
+    optimizer: torch.optim.Optimizer,
+    steps: Optional[
+        int
+    ] = None,  # number of optimizer steps (None => run all batches once)
+    active_module: Optional[int] = None,
+    grad_clip: Optional[float] = 1.0,
+) -> Dict[str, float]:
+    """
+    Run in-place adaptation: optimizer updates the model parameters directly.
+    If `steps` is None: iterate over data_loader once (one epoch).
+    If `steps` is an int: perform exactly `steps` optimizer updates, looping over
+    data_loader as many times as needed (infinite stream semantics).
+    """
+    device = next(model.parameters()).device
+    use_amp = bool(getattr(P, "use_amp", True))
+
+    model.train()
+    base = model.submodules[active_module] if active_module is not None else model
+
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and torch.cuda.is_available())
+    last_loss = None
+    step_count = 0
+
+    # Case 1: no explicit step budget -> old behavior (one pass over data_loader)
+    if steps is None:
+        for rays, rgbs in data_loader:
+            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(
+                device, non_blocking=True
+            )
+
+            optimizer.zero_grad()
+            with torch.cuda.amp.autocast(
+                enabled=use_amp and torch.cuda.is_available(), dtype=torch.float16
+            ):
+                loss = compute_mse_loss(
+                    P,
+                    model=base,
+                    data={"rays": rays, "rgbs": rgbs},
+                    params=None,
+                    active_module=active_module,
+                    reduction="mean",
+                )
+
+            scaler.scale(loss).backward()
+
+            if grad_clip is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip)
+
+            scaler.step(optimizer)
+            scaler.update()
+
+            last_loss = float(loss.detach())
+            step_count += 1
+
+    # TODO: needs to be cleaned up. maintain until viewer side is reorganized!
+    # Case 2: explicit step budget -> loop over loader indefinitely
+    else:
+        steps = int(steps)
+        data_iter = iter(data_loader)
+        while step_count < steps:
+            try:
+                rays, rgbs = next(data_iter)
+            except StopIteration:
+                # restart a new epoch over the same support set
+                data_iter = iter(data_loader)
+                rays, rgbs = next(data_iter)
+
+            rays, rgbs = rays.to(device, non_blocking=True), rgbs.to(
+                device, non_blocking=True
+            )
+
+            optimizer.zero_grad()
+            with torch.cuda.amp.autocast(
+                enabled=use_amp and torch.cuda.is_available(), dtype=torch.float16
+            ):
+                loss = compute_mse_loss(
+                    P,
+                    model=base,
+                    data={"rays": rays, "rgbs": rgbs},
+                    params=None,
+                    active_module=active_module,
+                    reduction="mean",
+                )
+
+            scaler.scale(loss).backward()
+
+            if grad_clip is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(base.parameters(), grad_clip)
+
+            scaler.step(optimizer)
+            scaler.update()
+
+            last_loss = float(loss.detach())
+            step_count += 1
+
+    return {"loss": (0.0 if last_loss is None else last_loss), "steps": step_count}

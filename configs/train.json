@@ -45,7 +45,7 @@
   "no_scheduler": false,
   "decay_factor": 10.0,
 
-  "checkpoint_path": "",
+  "checkpoint_path": "logs/example",
   "prefix": "step20000",
   "use_stored_args": false,
 

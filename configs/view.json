@@ -10,6 +10,6 @@
 
   "use_amp": true,
   "checkpoint_path": "logs/example",
-  "prefix": "best",
+  "prefix": "step20000",
   "ray_samples": 64
 }

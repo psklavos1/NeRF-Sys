@@ -709,7 +709,7 @@ def _contains_model_files(d: Path) -> bool:
     return d.is_dir() and any(f.is_file() and f.suffix == ".model" for f in d.iterdir())
 
 
-def resolve_checkpoint_dir(value: str, logs_root: str = "../logs") -> str:
+def resolve_checkpoint_dir(path: str, logs_root: str = "../logs") -> str:
     """
     Resolve and return the directory that contains checkpoint files (*.model).
 
@@ -726,15 +726,18 @@ def resolve_checkpoint_dir(value: str, logs_root: str = "../logs") -> str:
     The returned path is the actual resolved filesystem path
     (including 'logs/' if that is where the checkpoints live).
     """
-    p = Path(value)
+    p = Path(path)
 
     # logs/ is optional in input, but resolution must reflect reality
     if not p.exists():
-        p = Path(logs_root) / value
+        p = Path(logs_root) / path
+
+    if not p.exists():
+        p = Path(logs_root) / "logs" / path
 
     if not p.exists() or not p.is_dir():
         raise FileNotFoundError(
-            f"Checkpoint path not found: '{value}' (or '{Path(logs_root) / value}')"
+            f"Checkpoint path not found: '{path}', '{Path(logs_root) / path}, or '{Path(logs_root) / 'logs' / path}'!"
         )
 
     cur = p

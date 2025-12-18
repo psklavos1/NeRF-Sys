@@ -38,7 +38,6 @@ from data.dataset import get_dataset, get_image_metadata
 from data.image_metadata import ImageMetaDataset
 from data.multi_loader import MultiLoader
 from models.inr.meta_container import MetaContainer
-from evals.video_gen import render_video
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -77,9 +76,7 @@ def build_context(P, op: str) -> dict:
 
     # resolve checkpoint path from job ID if needed
     if getattr(P, "checkpoint_path", None):
-        P.checkpoint_path = resolve_checkpoint_dir(
-            P.checkpoint_path, logs_root="../logs"
-        )
+        P.checkpoint_path = resolve_checkpoint_dir(P.checkpoint_path, logs_root="..")
     print("Using checkpoint path:", P.checkpoint_path)
 
     # ---- clustering meta / SceneBox ----
@@ -300,14 +297,12 @@ def build_context(P, op: str) -> dict:
 
 
 def train(ctx: dict):
-    from evals import setup as test_setup
-    from train import setup as train_setup
-    from train.trainer import meta_trainer
+    from pipelines.offline_stage import setup
+    from pipelines.offline_stage.trainer import meta_trainer
 
     P = ctx["P"]
 
-    train_func, _, _ = train_setup(P.algo, P)
-    test_func = test_setup(P.algo, P)
+    train_func, test_func, _ = setup(P.algo, P)
 
     ctx["logger"].log(P)
     ctx["logger"].log(ctx["model"])
@@ -326,7 +321,7 @@ def train(ctx: dict):
 
 
 def eval(ctx: dict):
-    from evals.maml import runtime_evaluate_model as test_func
+    from pipelines.online_stage.runtime_adapt import runtime_evaluate as test_func
 
     P = ctx["P"]
     model = ctx["model"]
@@ -374,6 +369,8 @@ def eval(ctx: dict):
 
 
 def video(ctx: dict):
+    from pipelines.video_gen import render_video
+
     P = ctx["P"]
     print(ctx["device"])
     first_batch = next(iter(ctx["test_loader"]))

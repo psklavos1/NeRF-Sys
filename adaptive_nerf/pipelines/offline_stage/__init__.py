@@ -23,11 +23,12 @@ def setup(algo, P):
     # Dynamically import the appropriate train_step function
     if algo in ["fomaml", "maml", "reptile"]:
         if P.data_type == "ray":
-            from .maml import train_step_ray as train_step
+            from .meta_train_step import train_step
+            from .meta_eval_step import eval_step
     else:
         raise NotImplementedError("Only gradient-based modes are implemented.")
 
     # Determine whether to use today's date in logging
     today = True if P.log_date else False
     fname += f"_seed-{P.seed}"
-    return train_step, fname, today
+    return train_step, eval_step, fname, today

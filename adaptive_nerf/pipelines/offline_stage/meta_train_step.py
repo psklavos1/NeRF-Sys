@@ -7,7 +7,7 @@ from torch.amp import autocast
 from utils import psnr
 from common.utils import to_device_tree
 from nerfs.losses import compute_loss
-from nerfs.meta_learning import (
+from meta_core import (
     task_adapt,
     meta_update,
 )
@@ -15,7 +15,7 @@ from nerfs.meta_learning import (
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def train_step_ray(
+def train_step(
     P,
     step,
     model,

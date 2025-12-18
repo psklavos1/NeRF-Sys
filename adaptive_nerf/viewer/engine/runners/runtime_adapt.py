@@ -15,7 +15,7 @@ from data.image_metadata import ImageMetaDataset, ImageMetadata
 from data.dataset import get_image_metadata
 from data.infinite_loader import InfiniteDataLoader
 from data.ram_rays_dataset import RamRaysDataset
-from nerfs.meta_learning import runtime_adapt_inplace as runtime_adapt
+from pipelines.online_stage import runtime_adapt
 
 
 class RuntimeAdaptRunner(BaseRunner):
