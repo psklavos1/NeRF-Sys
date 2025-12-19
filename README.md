@@ -36,9 +36,9 @@ The mediator continuously listens for structured JSON job descriptions to a know
 Jobs are executed in isolation and are launched in a non-blocking manner, allowing multiple jobs to run concurrently or sequentially in the background
 
 Each job corresponds to one of the following operations:
-- **Offline training** using meta-learning: Learn a coarse initialization of the area, that allows rapid adaptaton.
-- **Runtime adaptation**: Upon new image arrival, adapt rapidly to new data preserving prior-knowledge. 
-- **Interactive visualization**: Launch the NeRF viewer for inspection or live monitoring.
+- **Offline Training** using meta-learning: Learn a coarse initialization of the area, that allows rapid adaptaton.
+- **Runtime Evaluation**: Adapt rapidly to new data and evaluate reconstruction metrics like PSNR, SSIM, and LPIPS.
+- **Interactive Visualization**: Launch the NeRF viewer for navigation or live adaptation monitoring.
 
 
 
