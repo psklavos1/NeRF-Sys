@@ -1,8 +1,10 @@
 import argparse
 from datetime import datetime
 import os
+import shutil
 import subprocess
 import tempfile
+from typing import Iterable
 import uuid
 import json
 import traceback
@@ -21,7 +23,7 @@ logger = logging.getLogger("Mediator")
 # ---------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------
-def setup_logging(cleanup: bool = False):
+def setup_logging():
     logs_dir = Path("logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -32,7 +34,7 @@ def setup_logging(cleanup: bool = False):
 
     fmt = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
-    file_handler = logging.FileHandler(str(log_path), mode="w" if cleanup else "a")
+    file_handler = logging.FileHandler(str(log_path), mode="a")
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 
@@ -43,6 +45,23 @@ def setup_logging(cleanup: bool = False):
         f"============================ Starting Mediator ============================"
     )
     logger.info(f"Mediator logging to {log_path}")
+    
+def cleanup_logs(logs_dir="logs", exclude_files:Iterable=None):
+    if not os.path.isdir(logs_dir):
+        return
+
+    exclude = set(exclude_files or [])
+
+    for name in os.listdir(logs_dir):
+        if name in exclude:
+            continue
+
+        path = os.path.join(logs_dir, name)
+
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
 
 
 # ---------------------------------------------------------------------
@@ -99,8 +118,8 @@ def launch_process(script, config_path=None, cwd=None, devices: str | None = Non
 
     return subprocess.Popen(
         cmd,
-        # stdout=subprocess.DEVNULL,
-        # stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         cwd=cwd,
         env=env,
     )
@@ -217,8 +236,10 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.cleanup:
+        cleanup_logs(logs_dir="logs", exclude_files=["example"])
 
-    setup_logging(args.cleanup)
+    setup_logging()
 
     logger.info("NeRF Mediator starting...")
     dev_str = args.devices if args.devices is not None else "all"

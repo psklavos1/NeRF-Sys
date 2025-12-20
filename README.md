@@ -1,7 +1,7 @@
 
-# Adaptive NeRF Framework for City-Scale Emergency Awareness
+# System Implementation of Adaptive City NeRF
 
-This repository provides the real-system integration of the Adaptive NeRF framework introduced in the paper:
+This repository provides the real-system integration, developed within the [**CREXDATA**](https://crexdata.eu/) Horizon project, of the Adaptive NeRF framework introduced in the paper:
 
 ```bibtex
 @inproceedings{sklavos2026adaptivenerf,
@@ -12,38 +12,44 @@ This repository provides the real-system integration of the Adaptive NeRF framew
   note      = {Accepted for publication}
 }
 ```
-for the European Union’s Horizon project: [**CREXDATA**](https://crexdata.eu/).
 
-This framework implements a city-scale Neural Radiance Field (NeRF) that can be updated incrementally as new aerial images become available. Instead of retraining a single NeRF from scratch, the framework:
-
-- Uses compact and efficient NeRF architectures
-- Decomposes large scenes into spatial NeRF experts
-- Pre-trains these experts to form a robust initialization
-- Updates only the relevant experts when new data arrive
-
-This allows the model to:
-- Adapt rapidly to scene changes
-- Preserve previously learned structure
-- Scale to large outdoor environments
+The aim of this component is to provide a reproducible and scalable system for
+training, adapting, and visualizing city-scale Neural Radiance Fields (NeRFs)
+under time-crtitical emergency conditions. By decomposing large scenes into
+spatially localized NeRF experts and enabling incremental updates as new aerial
+imagery becomes available, the system supports rapid adaptation, preserves
+previously learned structure, and allows reliable deployment of NeRF-based
+scene understanding in large, real-world environments.
 
 ---
 
-## Overview
-
-The system is centered around a persistent orchestrator, called the **Mediator**, that is designed to run as a long-lived process that orchestrates NeRF workloads based on incoming job configurations. 
-
-The mediator continuously listens for structured JSON job descriptions to a known **Kafka** topic and launches **NeRF jobs** to handle the received configurations. 
-Jobs are executed in isolation and are launched in a non-blocking manner, allowing multiple jobs to run concurrently or sequentially in the background
-
-Each job corresponds to one of the following operations:
-- **Offline Training** using meta-learning: Learn a coarse initialization of the area, that allows rapid adaptaton.
-- **Runtime Evaluation**: Adapt rapidly to new data and evaluate reconstruction metrics like PSNR, SSIM, and LPIPS.
-- **Interactive Visualization**: Launch the NeRF viewer for navigation or live adaptation monitoring.
-
-
+## Architecture
 
 ![Overview of the adaptive NeRF system architecture](nerf_arch.jpg)
 
+### Mediator
+
+The system is centered around a persistent orchestrator, called the **Mediator**,
+which runs as a long-lived process and coordinates **NeRF workloads** based on
+incoming job configurations.
+
+The Mediator continuously listens to a predefined **Kafka** topic for structured
+**JSON** job descriptions and launches **NeRF jobs** accordingly. Jobs are executed
+in isolation and in a non-blocking manner, allowing multiple jobs to run
+concurrently or sequentially in the background.
+
+### NeRF Runner
+
+The NeRF Runner acts as an isolated job executor responsible for running NeRF
+workloads based on structured JSON configurations. For each submitted job, the
+configuration fully defines the execution parameters, including data sources,
+model settings, and runtime behavior.
+
+Depending on the requested operation, the runner handles training, adaptation,
+evaluation, or visualization tasks (NeRF rendering) within an isolated execution context. All artifacts and logs produced during execution are stored under the job-specific
+output directory.
+
+---
 ## Structure
 
 ```text
@@ -96,7 +102,7 @@ pip install -r requirements.txt
 ### 3) Install tiny-cuda-nn.
 Efficient Instant-NGP primitives require `tiny-cuda-nn`.
 
-Make sure CUDA is compatible:
+1. Make sure CUDA is compatible:
 ```bash
 conda install -y -c nvidia cuda-nvcc=11.8 cuda-cudart-dev=11.8
 export CUDA_HOME="$CONDA_PREFIX"
@@ -105,7 +111,7 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 nvcc --version   # should say 11.8
 ```
 
-Install using the official [NVLabs](https://github.com/NVlabs/tiny-cuda-nn?utm_source) instructions:
+2. Install using the official [NVLabs](https://github.com/NVlabs/tiny-cuda-nn?utm_source) instructions:
 ```bash
 pip install --no-build-isolation -v "git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch"
 ```
@@ -132,14 +138,13 @@ converts a COLMAP reconstruction into the framework’s internal dataset format.
 script normalizes scene scale for stable training and optionally converts poses to a
 common ENU reference frame, storing all outputs using the framework’s coordinate
 conventions.
-
-**Input Data:**
+#### Input Data
 ```text
 data_path/
   ├── model/    # COLMAP sparse model (cameras.bin, images.bin, points3D.bin)
   └── images/   # All registered images used by the COLMAP model
 ```
-### Example Usage
+#### Example
 ```bash
 ./scripts/prepare_dataset.py --data_path data/drz --output_path data/drz/out/prepared --val_split 0.3 --scale_strategy camera_max --ecef_to_enu --enu_ref median
 ```
@@ -148,7 +153,7 @@ data_path/
 Rays are assigned to one or more spatial regions, with optional boundary overlap.
 2D clustering is recommended to reduce computation without affecting results.
 
-### Example Usage
+#### Example
 
 ```bash
  ./scripts/create_clusters.py --data_path data/drz/out/prepared --grid_dim 2 2 --cluster_2d --boundary_margin 1.05 --ray_samples 256 --center_pixels --scene_scale 1.1 --output g22_grid_bm105_ss11 --resume
@@ -156,12 +161,26 @@ Rays are assigned to one or more spatial regions, with optional boundary overlap
 
 ---
 
-## Demo
-To experiment with the mediator 3 demo configurations are provided in the `/configs` for training, evaluation and viewer operation respectively. Prepared data provided by: [DRZ](https://rettungsrobotik.de/) are located at `data/drz/out/example` while a demo checkpoint with 4 expert NeRFs is provided for testing: [`checkpoint`](https://github.com/psklavos1/adaptive-city-nerf/releases/tag/v1.0/4_experts.zip)
+## Usage
+This system supports three types of requests, each corresponding to a distinct
+NeRF operation logging their results at `logs/<job_id>`:
 
-> After downloading, extract into: `logs/example/`
+1. **train**: Performs offline meta-learning to obtain a coarse initialization
+   of the scene that enables rapid future adaptation.
+    > **Output**: Contains training execution logs, tensorboard logs for structured training monitoring (e.g. live training plots), and model checkpoints for future use. 
 
-### Demo experiment
+2. **eval**: Adapts a pre-trained model to newly acquired data for specified test-time-optimization steps (TTO) and evaluates
+   reconstruction quality using metrics such as PSNR, SSIM, and LPIPS.
+    > **Output**: Contains evaluation execution logs, a structured metrics dataframe, and the redenering results at `logs/<job_id>/gt and pred/<tto>` containing the evaluation images and the produced reconstruction by the NeRF respsectively.
+
+3. **view**: Launches the NeRF viewer for interactive navigation or live
+   monitoring of the adaptation process.
+    > **Output**: Contains viewer execution logs and user-captured screenshots and checkpoints generated through the viewer’s API controls. The viewer is web-based; when a `view` request is executed, the executor launches a viewer instance at `0.0.0.0:7070`, which users can access through a browser. The viewer’s lifecycle is managed via the provided interactive controls.
+
+### Demo
+To experiment with the mediator 3 demo configurations are provided under `/configs` for training, evaluation and viewer operation respectively. Prepared data provided by: [DRZ](https://rettungsrobotik.de/) are located at `data/drz/out/example` while a demo checkpoint with 4 expert NeRFs is provided for testing: [`checkpoint`](https://github.com/psklavos1/adaptive-city-nerf/releases/tag/v1.0/4_experts.zip)
+
+After downloading the model checkpoint, extract into: `logs/example`
 
 1. **Run Mediator**  
     ```bash
@@ -176,23 +195,21 @@ To experiment with the mediator 3 demo configurations are provided in the `/conf
 
 3.  **Monitor outputs** 
 
-> Outputs provided at `logs/mediator.txt` for the mediator and `logs/<job_id>` for the executed job. Job outputs contain both operation artifacts like model checkpoints or rendered images and job logs.
+> Outputs provided at `logs/mediator.txt` for the mediator and `logs/<job_id>` for the executed job.
     
 ---
 
 ## Configuration
 
-Each job is defined by a JSON configuration file.  
-The configuration fully specifies the dataset, model, optimization, and runtime
+Each job is defined by a JSON configuration file. The configuration fully specifies the dataset, model, optimization, and runtime
 behavior for a single job.
-
 All jobs are submitted through a single entry point and are distinguished by the
 `op` field.
 
 
 ### Train (`op: "train"`)
 
-Offline training that initializes the NeRF model and produces a checkpoint.
+Offline training meta-learns a good model initialization that allows rapid adaptation.
 
 | Field | Description |
 |------|------------|
@@ -222,7 +239,7 @@ Offline training that initializes the NeRF model and produces a checkpoint.
 
 ### Eval (`op: "eval"`)
 
-Runtime adaptation of a pre-trained model using newly available images.
+Runtime evaluation of a pre-trained model using newly available images to produce reconstruction statistics.
 
 | Field | Description |
 |------|------------|
@@ -269,4 +286,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 ---
 
 ## Acknowledgments
-This research is supported by the European Union’s Horizon 2020 research and innovation programme under grant agreement No. 101092749, project [**CREXDATA**](https://crexdata.eu/). We sincerely thank the members of the [Deutsches Rettungsrobotik Zentrum (DRZ)](https://rettungsrobotik.de/), for supporting the data acquisition and providing the aerial dataset used in this work.
+This research is supported by the European Union’s Horizon 2020 research and innovation programme under grant agreement No. 101092749, project [**CREXDATA**](https://crexdata.eu/). This contribution is provided on behalf of the [**Technical University of Crete (TUC)**](https://www.tuc.gr/en/home).
+
+We sincerely thank the members of the [Deutsches Rettungsrobotik Zentrum (DRZ)](https://rettungsrobotik.de/), for supporting the data acquisition and providing the aerial dataset used in this work.
